@@ -174,6 +174,21 @@ struct CoreConnection::State {
 };
 SessionEndpoint::SessionEndpoint(std::shared_ptr<State> s, std::weak_ptr<CoreConnection> c)
     : state_(std::move(s)), connection_(std::move(c)) {}
+bool SessionEndpoint::belongsTo(const CoreConnection &c) const noexcept {
+    return connection_.lock().get() == &c;
+}
+EnqueueResult SessionEndpoint::enqueueInput(const std::vector<uint8_t> &b, InputOrigin o) noexcept {
+    auto c = connection_.lock();
+    return c ? c->admitInput(metadata().id, b, o, this) : EnqueueResult::Closed;
+}
+EnqueueResult SessionEndpoint::resize(uint16_t rows, uint16_t cols) noexcept {
+    auto c = connection_.lock();
+    return c ? c->admitResize(metadata().id, rows, cols, this) : EnqueueResult::Closed;
+}
+RequestId SessionEndpoint::requestClose() noexcept {
+    auto c = connection_.lock();
+    return c ? c->admitClose(metadata().id, this) : 0;
+}
 TransportChunk SessionEndpoint::readChunk() noexcept {
     std::unique_lock<std::mutex> lock(state_->mutex);
     state_->changed.wait(lock, [this] {
@@ -378,14 +393,25 @@ RequestId CoreConnection::createSession(uint16_t rows, uint16_t cols) {
         return 0;
     }
 }
-EnqueueResult CoreConnection::submitInput(SessionId id, const std::vector<uint8_t> &bytes,
-                                          InputOrigin origin) {
+EnqueueResult CoreConnection::submitInput(SessionId id, const std::vector<uint8_t> &bytes, InputOrigin origin) {
+    return admitInput(id, bytes, origin, nullptr);
+}
+EnqueueResult CoreConnection::admitInput(SessionId id, const std::vector<uint8_t> &bytes, InputOrigin origin, const SessionEndpoint *source) {
     try {
         std::lock_guard<std::mutex> lock(state_->mutex);
         auto it = state_->sessions.find(id);
         if (state_->stopped || state_->shutdown || it == state_->sessions.end() ||
             it->second.closing || it->second.closed)
             return EnqueueResult::Closed;
+        // Registry identity and endpoint state stay protected through admission.
+        // No endpoint->connection nested lock path; metadata() above is released.
+        std::unique_lock<std::mutex> endpointLock;
+        if (source) {
+            if (it->second.endpoint.get() != source) return EnqueueResult::Closed;
+            auto &e = *it->second.endpoint->state_;
+            endpointLock = std::unique_lock<std::mutex>(e.mutex);
+            if (e.cancelled || e.lost || e.sealed) return EnqueueResult::Closed;
+        }
         auto &s = it->second;
         auto limit = origin == InputOrigin::User ? UserBytes : ReplyBytes;
         auto &staged = origin == InputOrigin::User ? s.userBytes : s.replyBytes;
@@ -414,12 +440,24 @@ EnqueueResult CoreConnection::submitInput(SessionId id, const std::vector<uint8_
     }
 }
 EnqueueResult CoreConnection::submitResize(SessionId id, uint16_t rows, uint16_t cols) {
+    return admitResize(id, rows, cols, nullptr);
+}
+EnqueueResult CoreConnection::admitResize(SessionId id, uint16_t rows, uint16_t cols, const SessionEndpoint *source) {
     try {
         std::lock_guard<std::mutex> lock(state_->mutex);
         auto it = state_->sessions.find(id);
         if (state_->stopped || state_->shutdown || it == state_->sessions.end() ||
             it->second.closing || it->second.closed)
             return EnqueueResult::Closed;
+        // Registry identity and endpoint state stay protected through admission.
+        // No endpoint->connection nested lock path; metadata() above is released.
+        std::unique_lock<std::mutex> endpointLock;
+        if (source) {
+            if (it->second.endpoint.get() != source) return EnqueueResult::Closed;
+            auto &e = *it->second.endpoint->state_;
+            endpointLock = std::unique_lock<std::mutex>(e.mutex);
+            if (e.cancelled || e.lost || e.sealed) return EnqueueResult::Closed;
+        }
         if (!validSize(rows, cols) || state_->userTickets >= 47)
             return EnqueueResult::Overflow;
         Frame f;
@@ -439,12 +477,24 @@ EnqueueResult CoreConnection::submitResize(SessionId id, uint16_t rows, uint16_t
     }
 }
 RequestId CoreConnection::closeSession(SessionId id) {
+    return admitClose(id, nullptr);
+}
+RequestId CoreConnection::admitClose(SessionId id, const SessionEndpoint *source) {
     try {
         std::lock_guard<std::mutex> lock(state_->mutex);
         auto it = state_->sessions.find(id);
         if (state_->stopped || state_->shutdown || it == state_->sessions.end() ||
             it->second.closing || it->second.closed)
             return 0;
+        // Registry identity and endpoint state stay protected through admission.
+        // No endpoint->connection nested lock path; metadata() above is released.
+        std::unique_lock<std::mutex> endpointLock;
+        if (source) {
+            if (it->second.endpoint.get() != source) return 0;
+            auto &e = *it->second.endpoint->state_;
+            endpointLock = std::unique_lock<std::mutex>(e.mutex);
+            if (e.cancelled || e.lost) return 0;
+        }
         Frame f;
         f.type = MessageType::CloseSession;
         f.session = id;

@@ -6,4 +6,7 @@ Scope: owned transport chunks, tagged emulator replies, final flush ordering, im
 
 Verification will include behavioral RED/GREEN tests, real libvterm DSR/CPR, endpoint binding and reserves, the forced scrollbar lock schedule, all lifecycle and default desktop tests. Task 10, wire/backend changes, cutover and renderer changes are outside this checkpoint.
 
-Status: inspection underway; implementation and qualification pending.
+Status: owned seam, matching endpoint identity helpers, IPC adapter and composed
+source guard implemented. Source guard 24 cases, seam/adapter and forced scrollbar
+checks pass. Real saturated IPC reply qualification and complete lifecycle/default
+desktop suite remain pending at this checkpoint. This is not Task 9 completion.

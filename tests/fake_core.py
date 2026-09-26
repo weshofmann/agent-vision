@@ -41,6 +41,8 @@ held=[]
 ordinary=[]
 reply_held=None
 partial_inputs=0
+binding_base=0
+binding_input=False
 control_held=[]
 control_credit=set()
 control_close=set()
@@ -51,11 +53,12 @@ while True:
     last_request=r
     if t==3:
         session+=1
-        if mode=='stale': session=1  # deliberate fully-retired ID reuse to challenge old handles
+        if mode in ('stale','binding'): session=1  # deliberate fully-retired ID reuse to challenge old handles
         assert body==b'\x00\x18\x00\x50\x00\x04\x00\x00'
+        if mode=="binding": binding_base=r; binding_input=False
         out=frame(4,r,session,body)
         data=b'A\x00\xff' if session==1 else b'Bxy'
-        if mode not in ('blocked-writer','partial-write'):
+        if mode not in ('blocked-writer','partial-write','dsr-reserve'):
             out+=frame(9,sid=session,body=struct.pack('>Q',1)+data)
         if mode=='credit-detach' and session==1:
             out+=frame(9,sid=1,body=struct.pack('>Q',2)+b'tail')
@@ -68,6 +71,25 @@ while True:
         if mode=='blocked-writer' and session==16:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)
     elif t in (5,6,14):
+        if mode=='dsr-reserve' and t in (5,6):
+            ordinary.append((t,body))
+            if len(ordinary)<=47:
+                assert ordinary[:min(2,len(ordinary))]==[(5,b'u'*30720)]*min(2,len(ordinary))
+                if len(ordinary)>2: assert ordinary[-1]==(6,b'\x00\x1e\x00\x64')
+                if len(ordinary)==47: s.sendall(frame(9,sid=sid,body=struct.pack('>Q',1)+b'\x1b[5n\x1b[6n'))
+                continue
+            assert len(ordinary)==48 and t==5 and body==b'\x1b[0n\x1b[1;1R'
+            s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+b'ready')+frame(9,sid=sid,body=struct.pack('>Q',3)+b'\x1b[5n'))
+            continue
+        if mode=='binding' and t==14 and not binding_input: binding_base=r
+        if mode=='binding' and t in (5,6):
+            if t==5:
+                assert not binding_input and body==b'x' and r==binding_base+1
+                binding_input=True
+            else:
+                assert binding_input and body==b'\x00\x18\x00\x50' and r==binding_base+2
+                s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+b'ok'))
+
         if mode=='early-shutdown' and t==6:
             s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+b'held')); continue
         if mode=='control-lanes':
@@ -126,7 +148,7 @@ while True:
         if mode=='control-lanes':
             assert sid not in control_close
             control_close.add(sid); control_held.append((t,r,sid)); continue
-        s.sendall(frame(11,r,sid,struct.pack('>Q',2 if mode=='credit-detach' else 0 if mode=='partial-write' else 1)))
+        s.sendall(frame(11,r,sid,struct.pack('>Q',2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode=='partial-write' else 1)))
         if mode=='credit-detach':
             assert credit_held is not None
             old_r,old_sid=credit_held

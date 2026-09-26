@@ -70,6 +70,10 @@ struct StartResult {
 // cannot issue credit/flush to a future endpoint with the same opaque ID.
 class SessionEndpoint {
   public:
+    bool belongsTo(const CoreConnection &) const noexcept;
+    EnqueueResult enqueueInput(const std::vector<uint8_t> &, InputOrigin) noexcept;
+    EnqueueResult resize(uint16_t rows, uint16_t cols) noexcept;
+    RequestId requestClose() noexcept;
     TransportChunk readChunk() noexcept;
     void consumed(size_t) noexcept;
     SessionMetadata metadata() const noexcept;
@@ -120,6 +124,9 @@ class CoreConnection {
     void lose(ContactError) noexcept;
     bool dispatch(const Frame &);
     void endpointFlushed(SessionEndpoint &, uint64_t) noexcept;
+    EnqueueResult admitInput(SessionId, const std::vector<uint8_t> &, InputOrigin, const SessionEndpoint *);
+    EnqueueResult admitResize(SessionId, uint16_t, uint16_t, const SessionEndpoint *);
+    RequestId admitClose(SessionId, const SessionEndpoint *);
     RequestId admitCredit(SessionId, uint32_t, const SessionEndpoint *source);
     std::unique_ptr<State> state_;
 };

@@ -81,7 +81,7 @@ int main()
     // schedule production publication without reader/writer competition. Real
     // shell/resource cleanup is independently checked in the desktop PTY test.
     tvterm::PtyDescriptor descriptor {-1, -1};
-    auto *controller = new tvterm::TerminalController({40, 10}, factory, descriptor);
+    auto *controller = new tvterm::TerminalController({40, 10}, factory, std::unique_ptr<tvterm::SessionTransport>(new tvterm::LocalSessionTransport(descriptor)));
     Gate gate;
     auto *group = new TGroup(TRect(0, 0, 41, 10));
     const tvterm::TVTermConstants constants {2000,2001,2002,2003,100,101,102,1000,1001};

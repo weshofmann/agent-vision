@@ -1,8 +1,9 @@
-# Narrow Unix lifecycle patch
+# Composed local lifecycle and presentation transport patches
 
 `tvterm-lifecycle.patch` is relative to upstream tvterm
-`210eb23564da06c358d2623388939bb02f7f3419`. It changes only the PTY/controller
-headers and implementations. Turbo Vision, libvterm, emulator, window/frame/view
+`210eb23564da06c358d2623388939bb02f7f3419`. It now changes only local PTY
+headers and implementation. `tvterm-transport.patch` owns all controller changes
+against the same pristine HEAD; the two patches have disjoint paths. Turbo Vision, libvterm, emulator, window/frame/view
 code, key encoding and cell rendering remain unchanged. The retained application
 uses these existing interfaces. Windows is outside this slice and rejected by
 the application build; no Windows lifecycle claim is made.
@@ -64,3 +65,27 @@ The reviewed mutex patch fails with an explicit three-second watchdog; the fixed
 queue separation completes and delivers the scrollbar event to the real emulator.
 Actual desktop verification separately covers finite scrolling output, subsequent
 input/menu movement/resize and confirmed close/quit with child/worker/FD cleanup.
+
+
+The transport seam retains the concrete controller, emulator, view and renderer.
+Owned chunks release borrowed ClientDataRead spans before consumption credit;
+End forces publication and dirty/wakeup before `flushed(sequence)` exposes status.
+A scoped Writer tag identifies synchronous emulator replies and restores User
+before queued UI events. Tagged byte segments and resize markers preserve emission
+order, with 64 KiB / 128-entry intermediate bounds. Transport admission and local
+PTY writes run outside queue/emulator/state locks. Overflow disconnects process
+input explicitly while retained local events remain usable.
+
+`finishPresentation()` cancels local waits and joins outside callbacks; it never
+requests IPC Close. Post-finish local events stay queued, and the existing UI-only
+`stateHasBeenUpdated()` poll pumps them outside state/render callbacks. This keeps
+scrollbar enqueue queue-only. The emulator is destroyed before its nonowning
+Writer and the owned transport. Local factory/finish/status retain PTY behavior;
+the IPC adapter rejects mismatched bindings and atomically gates input/resize/Close
+on its owned endpoint identity. Retained Exited sessions can still request Close.
+
+The source guard takes both disjoint patches atomically, recognizes only pristine
+or the complete exact effective composition, rejects partial/conflicting/staged
+unexpected edits before mutation, and preserves dependency files/index/flags on
+rejection. An old patch composition requires a fresh owned pinned source checkout;
+the guard never repairs or resets it.

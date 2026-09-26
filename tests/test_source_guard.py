@@ -56,7 +56,7 @@ class SourceGuard(unittest.TestCase):
                             if p.is_file() and '.git' not in p.relative_to(repo).parts))
                      for repo in (self.root, self.dep, self.nested))
     def run_guard(self):
-        return subprocess.run([sys.executable, str(HELPER), str(self.root), str(self.patch)],
+        return subprocess.run([sys.executable, str(HELPER), str(self.root), str(self.patch), *map(str, getattr(self, "extra", []))],
                               env=ENV, capture_output=True, timeout=10)
     def rejected_unchanged(self):
         before = self.snapshot()
@@ -96,6 +96,32 @@ class SourceGuard(unittest.TestCase):
         (self.dep/'dependency.cc').write_text('different dependency revision\n')
         git(self.dep, 'add', 'dependency.cc'); git(self.dep, 'commit', '-qm', 'different')
         self.rejected_unchanged()
+    def composition(self):
+        (self.root/'source.cc').write_text('second accepted patch\n')
+        second = Path(self.tmp.name)/'second.patch'
+        second.write_bytes(git(self.root, 'diff', '--binary', '--no-color', '--no-ext-diff', 'HEAD', '--', 'source.cc'))
+        (self.root/'source.cc').write_text('unrelated baseline\n')
+        self.extra = [second]
+    def test_composed_pristine_and_already_applied(self):
+        self.composition()
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.assertEqual((self.root/'source.cc').read_text(), 'second accepted patch\n')
+        before=self.snapshot(); self.assertEqual(self.run_guard().returncode,0)
+        self.assertEqual(before,self.snapshot())
+    def test_composed_staged(self):
+        self.composition(); self.applied(); (self.root/'source.cc').write_text('second accepted patch\n')
+        git(self.root,'add','.'); before=self.snapshot()
+        self.assertEqual(self.run_guard().returncode,0); self.assertEqual(before,self.snapshot())
+    def test_partial_composition_rejected(self):
+        self.composition(); self.applied(); self.rejected_unchanged()
+    def test_conflicting_composition_rejected(self):
+        self.extra=[self.patch]; self.rejected_unchanged()
+    def test_composed_hidden_flags_rejected(self):
+        self.composition(); self.flagged_rejected(self.root,'source.cc','--skip-worktree')
+    def test_composed_gitlink_edit_rejected(self):
+        self.composition(); (self.dep/'dependency.cc').write_text('unexpected\n')
+        git(self.dep,'add','.'); self.rejected_unchanged()
+
     def flagged_rejected(self, repo, name, flag, changed=True):
         # Before application: a rejection must not add even the accepted patch.
         git(repo, 'update-index', flag, name)
