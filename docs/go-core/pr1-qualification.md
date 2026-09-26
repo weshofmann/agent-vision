@@ -29,7 +29,22 @@ is completed; this initial checkpoint makes no runtime-success claim.
   passed both spec and quality gates, including separate literal construction
   of all 44 fixtures. Complete MIT notice was brought forward with its pin;
   Task 6 retains packaging responsibility.
-- Tasks 2–6: pending.
+- Task 2 runtime at `8985c3c023f38d46ccd1f9d33c5548bc30b0b59a`: full
+  race/GC suite and vet passed on matching final source; 500 alternating
+  natural-exit/direct-kill cycles passed (5.159 seconds), restoring FD and
+  goroutine baselines. Native checks cover V0 termios, shell/tty/job control,
+  resize, cancellation/rollback and normalized inherited SIGCHLD. The native
+  exec inventory covers descriptors 3–1023; no forced PID-reuse or additional
+  platform qualification is claimed. Controller post-commit module tests passed.
+  Independent Astra/high review passed runtime spec and found one Minor native
+  fixture lost wakeup (R1), corrected at
+  `8bcd4e8244557c3601d4ff1d79d6e9bde514533e`. Original PTY and two controlled
+  single-resize schedules passed ten repeats, alongside full race/vet and
+  controller post-commit module checks. Independent scoped review closed R1
+  with no new breakage. Initial test red was missing-API compilation;
+  supplemental behavioral regressions do not retroactively establish test-first
+  sequencing. Final whole-PR exact-SHA stress remains required.
+- Tasks 3–6: pending.
 - V0 clean baseline at `233485afa6da31950cf9ca05a9735a0f57b61489`: fresh
   Debug configure/build and all 12 CTests passed (23.54 seconds), including
   synthetic desktop PTY and terminal restoration checks. Qualified host:
