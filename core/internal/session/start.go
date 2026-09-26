@@ -19,12 +19,16 @@ func (m *Manager) start(r *reservation, window uint32) {
 	}
 	m.mu.Lock()
 	if err == nil && resources != nil && resources.Process != nil && r.ctx.Err() == nil && !m.stopping {
+		r.commandWake = make(chan struct{}, 1)
+		r.commandCtx, r.commandCancel = context.WithCancel(r.ctx)
+		r.ioWorkers.Add(1) // registration before Created and startDone publication
 		r.published = true
 		r.state = live
 		m.emitLocked(Event{Session: r.id, Request: r.request, Message: protocol.SessionCreated{Rows: r.config.Rows, Cols: r.config.Cols, AcceptedWindow: window}})
 		m.mu.Unlock()
+		go m.runCommands(r, resources.MasterFD)
 		go m.observe(r, done)
-		// Reader/command workers may only begin after this commit (Tasks 4/5).
+		// Task5 reader may only begin after this commit.
 		return
 	}
 	m.mu.Unlock()
@@ -140,6 +144,7 @@ func (m *Manager) observe(r *reservation, done <-chan ProcessResult) {
 	}
 	m.mu.Lock()
 	r.result = v
+	r.commandCancel() // end command I/O; lifetime context remains available for Task5 drain
 	if r.state == live {
 		r.state = draining
 	}

@@ -49,19 +49,28 @@ type reservation struct {
 	startDone       chan struct{}
 	observed        chan struct{}
 	result          ProcessResult  // observed closes after the sole Process.Done read
-	ioWorkers       sync.WaitGroup // future FD workers: register before startDone, join before rollback
+	ioWorkers       sync.WaitGroup // FD workers: register before startDone, join before rollback
 	cleanupMu       sync.Mutex
 	cleanupRunning  bool
 	cleanupComplete bool
 	cleanupDone     chan struct{}
 	cleanupErr      error
 	closeRequest    protocol.RequestID
+	commandCtx      context.Context
+	commandCancel   context.CancelFunc
+	commands        [policy.OrdinarySlots]command
+	commandHead     int
+	commandQueued   int
+	inputBytes      int
+	commandWake     chan struct{}
 }
 
 // Manager serializes admission, cancellation and Created publication. Resource
 // work never runs under mu. Each reservation owns late-returned spawn resources.
 type Manager struct {
 	mu              sync.Mutex
+	commandIO       commandIO
+	commandCount    int
 	policy          policy.Policy
 	spawner         Spawner
 	sink            Sink
@@ -78,7 +87,7 @@ type Manager struct {
 }
 
 func NewManager(p policy.Policy, s Spawner, sink Sink) *Manager {
-	m := &Manager{policy: p, spawner: s, sink: sink, records: make(map[protocol.SessionID]*reservation), usable: true, done: make(chan struct{})}
+	m := &Manager{commandIO: nativeCommandIO{}, policy: p, spawner: s, sink: sink, records: make(map[protocol.SessionID]*reservation), usable: true, done: make(chan struct{})}
 	_, m.initErr = rand.Read(m.epoch[:])
 	// Random initial counter is opaque; it contains no process or address data.
 	var seed [8]byte
@@ -121,6 +130,8 @@ func (m *Manager) Admit(f protocol.Frame) error {
 		r := &reservation{id: id, request: f.Header.Request, config: SpawnConfig{Rows: v.Rows, Cols: v.Cols}, ctx: ctx, cancel: cancel, state: starting, startDone: make(chan struct{}), observed: make(chan struct{}), cleanupDone: make(chan struct{})}
 		m.records[id] = r
 		go m.start(r, v.ReceiveWindow)
+	case protocol.InputBytes, protocol.ResizeSession:
+		return m.admitCommandLocked(f, msg)
 	case protocol.CloseSession:
 		r := m.records[f.Header.Session]
 		if r == nil {
@@ -137,7 +148,7 @@ func (m *Manager) Admit(f protocol.Frame) error {
 		m.shutdownRequest = f.Header.Request
 		m.stopLocked()
 	default:
-		// Ordered PTY commands/credit are added by Tasks 4/5, after Created gating.
+		// Task5 adds independent decoder-side credit accounting.
 		if f.Header.Session != 0 && m.records[f.Header.Session] == nil {
 			return reject(protocol.ErrorUnknownSession)
 		}
