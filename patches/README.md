@@ -14,8 +14,11 @@ termination read, unconditional waits/lost notifications, and blocking I/O that
 could prevent shutdown. This establishes concrete gaps; it does not retroactively
 prove which schedule caused the historical feasibility zombie.
 
-The patch makes Unix workers joinable, shares one mutex for event conditions and
-waits, and makes termination atomic. `finish()` is idempotent, UI-thread only and
+The patch makes Unix workers joinable and termination atomic. An isolated queue
+mutex protects enqueue/dequeue and writer wake/stop predicates; condition waits
+use that same mutex and release it before emulator/state locking. Timeout fields
+remain under the emulator mutex. Reader notifications retain a wake flag until
+consumed, preventing lost wakeups without a state-to-emulator lock path. `finish()` is idempotent, UI-thread only and
 must run **outside** terminal-state/render callbacks. It requests cancellation,
 joins both workers, closes the master and captures/reaps the direct child; it
 retains emulator/state for an exited window. Existing `shutDown()` now finishes
@@ -43,3 +46,12 @@ close-on-exec so later shells do not retain another terminal's master.
 rejects unexpected tracked source edits, and never resets a working tree. Use a
 fresh build directory after changing patch versions. Focused tests use real PTYs,
 wait statuses, kernel thread counts and FD counts, not mocked lifecycle calls.
+
+R1 regression: `scrollback_lock` coordinates the actual state-held
+`TerminalView::draw`/scrollbar broadcast with the production publication method.
+The test compilation exposes controller internals only to force scheduling; the
+product has no test hooks. An inert PTY descriptor avoids unrelated child I/O.
+The reviewed mutex patch fails with an explicit three-second watchdog; the fixed
+queue separation completes and delivers the scrollbar event to the real emulator.
+Actual desktop verification separately covers finite scrolling output, subsequent
+input/menu movement/resize and confirmed close/quit with child/worker/FD cleanup.

@@ -293,6 +293,40 @@ def quit_both(binary, folder):
         return {'confirmed_quit_both_live': True, 'both_direct_children_absent': True, **restored}
     finally: d.close()
 
+def scrolling(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [pid ') and d.contains('Terminal B [pid '), 'two initial windows missing')
+        pids = [int(re.search(f'Terminal {label} \\[pid (\\d+)\\]', d.text()).group(1)) for label in ('A','B')]
+        initial = resources(d.app_pid)
+        d.command("i=0; while [ \"$i\" -lt 80 ]; do printf 'ROW_%s\\n' \"$i\"; i=$((i+1)); done; printf 'SCROLL_%s\\n' DONE")
+        # Observe the rendered output stream, not just a command echo or a
+        # potentially older scrollback viewport. Missing markers alone are not
+        # treated as deadlock proof; the deterministic C++ test proves R1.
+        d.wait(lambda: b'SCROLL_DONE' in d.raw, 'finite scrolling output not rendered')
+        d.command("printf 'AFTER_%s\\n' SCROLL_INPUT")
+        d.wait(lambda: b'AFTER_SCROLL_INPUT' in d.raw, 'shell input after scroll failed')
+        d.menu('r'); d.send('\x1b[C' + '\x1b[1;2D' + '\r')
+        rows, cols = inner(d.bounds('B'))
+        d.command("printf 'SCROLL_SIZE_'; stty size")
+        d.wait(lambda: f'SCROLL_SIZE_{rows} {cols}'.encode() in d.raw, 'scroll/resize child size mismatch')
+        d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'scrolling live-close confirmation missing')
+        d.confirm(True)
+        d.wait(lambda: not d.contains('Terminal B ['), 'scrolling B close failed')
+        after_close = resources(d.app_pid)
+        assert after_close == {'threads': initial['threads']-2, 'fds': initial['fds']-1}
+        assert d.absent(pids[1])
+        d.command("printf 'SCROLL_SURVIVOR_%s\\n' OK")
+        d.wait(lambda: d.contains('SCROLL_SURVIVOR_OK'), 'scrolling close damaged survivor')
+        d.menu('q'); d.wait(lambda: d.contains('Terminate'), 'scrolling survivor quit confirmation missing')
+        d.confirm(True); restored = d.restore()
+        assert all(d.absent(pid) for pid in pids)
+        return {'finite_scrolling_output_followed_by_input': True,
+                'menu_move_resize_after_scroll': True, 'child_size_after_scroll': [rows, cols],
+                'confirmed_close_survivor_quit_cleanup': True,
+                'owned_resources': {'initial': initial, 'after_close': after_close}, **restored}
+    finally: d.close()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
@@ -301,7 +335,8 @@ if __name__ == '__main__':
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     results = {'interaction': interaction(args.binary.resolve(), args.output/'interaction'),
                'live_close_quit': live_close_quit(args.binary.resolve(), args.output/'live-close-quit'),
-               'quit_both': quit_both(args.binary.resolve(), args.output/'quit-both')}
+               'quit_both': quit_both(args.binary.resolve(), args.output/'quit-both'),
+               'scrolling': scrolling(args.binary.resolve(), args.output/'scrolling')}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output/'summary.json').write_text(json.dumps(results, indent=2)+'\n')
     print(json.dumps(results, indent=2))
