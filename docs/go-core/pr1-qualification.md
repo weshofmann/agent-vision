@@ -22,8 +22,21 @@ is completed; this initial checkpoint makes no runtime-success claim.
 
 ## Qualification record
 
-- Tasks 1–6: pending.
-- V0 clean baseline: pending in this new worktree.
+- Task 1 at `d5588c4a1cf42681fc527432554a999bb14620dd`: uncached module
+  tests, race tests, vet and module verification passed. Final-source 30-second
+  fuzz runs passed: ReadFrame 7,831,267 executions and Decode 7,551,847
+  executions, with no crash/panic/failing corpus. Independent Sol/high review
+  passed both spec and quality gates, including separate literal construction
+  of all 44 fixtures. Complete MIT notice was brought forward with its pin;
+  Task 6 retains packaging responsibility.
+- Tasks 2–6: pending.
+- V0 clean baseline at `233485afa6da31950cf9ca05a9735a0f57b61489`: fresh
+  Debug configure/build and all 12 CTests passed (23.54 seconds), including
+  synthetic desktop PTY and terminal restoration checks. Qualified host:
+  macOS 26.6.2 arm64, Apple Clang 21, CMake 3.31.10, Go 1.27.0.
+  Commands: `cmake -S . -B build-v0 -DCMAKE_BUILD_TYPE=Debug`,
+  `cmake --build build-v0 --parallel 4`, and
+  `ctest --test-dir build-v0 --output-on-failure`.
 - Final exact-SHA verification and independent review: pending.
 
 Only synthetic reviewed summaries and fixtures are public. Raw environment,
