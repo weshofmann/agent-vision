@@ -1,0 +1,87 @@
+"""DISPOSABLE deterministic accounting/ordering model. No product IPC implementation."""
+import unittest
+
+class Slots:
+    limits = {'ordinary': 48, 'credit': 16, 'close': 16, 'shutdown': 1}
+    def __init__(self): self.pending = {}; self.replies = {}
+    def admit(self, request, lane):
+        assert request not in self.pending and request not in self.replies
+        if sum(v == lane for v in self.pending.values()) == self.limits[lane]:
+            self.replies[request] = 'LIMIT'; return False
+        self.pending[request] = lane; return True
+    def reply(self, request, result):
+        assert request in self.pending and request not in self.replies
+        del self.pending[request]; self.replies[request] = result
+
+class Session:
+    def __init__(self, window=256):
+        self.window = window; self.available = window
+        self.next_sequence = 1; self.inflight = {}; self.queue = []
+        self.sent_uncredited = 0; self.wait_complete = False; self.sealed = False
+        self.exited = False; self.events = []; self.state = 'Live'
+    def observe_read(self, count):
+        assert not self.sealed and 0 < count <= self.available
+        sequence = self.next_sequence; self.next_sequence += 1
+        self.available -= count; self.inflight[sequence] = count
+        return sequence
+    def publish_read(self, sequence):
+        count = self.inflight.pop(sequence)
+        self.queue.append((sequence,count))
+    def send_output(self):
+        sequence,count = self.queue.pop(0)
+        self.sent_uncredited += count
+        self.events.append(('output',sequence,count))
+        # Sending consumes no second credit: credit was reserved at successful read.
+    def credit(self, count):
+        assert self.state in {'Live','Draining','Closing','Exited'}
+        assert 0 < count <= self.sent_uncredited
+        self.sent_uncredited -= count; self.available += count
+        assert self.available <= self.window
+    def request_seal(self): self.wait_complete = True; self.state = 'Draining'
+    def finalize(self):
+        if self.inflight: return False
+        assert self.wait_complete
+        self.sealed = True
+        if self.queue: return False
+        if not self.exited:
+            self.events.append(('exited',self.next_sequence-1)); self.exited=True;self.state='Exited'
+        return True
+
+class ModelTests(unittest.TestCase):
+    def test_saturated_admission_control_progress_and_seal(self):
+        slots=Slots();session=Session()
+        # ID 1 is a partially written input; IDs 2..48 are pending ordinary commands.
+        for request in range(1,49): self.assertTrue(slots.admit(request,'ordinary'))
+        self.assertFalse(slots.admit(49,'ordinary'));self.assertEqual(slots.replies[49],'LIMIT')
+        first=session.observe_read(128);session.publish_read(first);session.send_output()
+        second=session.observe_read(128) # successful read deliberately held before publication
+        self.assertEqual(session.available,0)
+        session.request_seal();self.assertFalse(session.finalize())
+        # Credit decoding bypasses partially blocked PTY input and ordinary saturation.
+        self.assertTrue(slots.admit(50,'credit'));session.credit(128);slots.reply(50,'ACK')
+        self.assertEqual(session.available,128)
+        self.assertTrue(slots.admit(51,'close'));session.state='Closing'
+        for request in range(1,49): slots.reply(request,('CANCELLED',7 if request==1 else 0))
+        # Accepted read survives cancellation and precedes Exited; send doesn't re-charge.
+        session.publish_read(second);before=session.available;session.send_output()
+        self.assertEqual(session.available,before)
+        self.assertTrue(session.finalize())
+        self.assertEqual(session.events,[('output',1,128),('output',2,128),('exited',2)])
+        # Closing/Exited still processes valid credits; double credit rejected.
+        session.state='Closing';session.credit(128)
+        with self.assertRaises(AssertionError): session.credit(1)
+        self.assertEqual(session.available,session.window)
+        slots.reply(51,'CLOSED');self.assertEqual(len(slots.replies),51);self.assertFalse(slots.pending)
+        # A credit arriving after registry removal produces one UNKNOWN reply, no ledger change.
+        self.assertTrue(slots.admit(52,'credit'));slots.reply(52,'UNKNOWN_SESSION')
+        self.assertEqual(session.available,256)
+    def test_all_reserved_lanes_fit_and_shutdown_survives(self):
+        slots=Slots();request=0
+        for lane,count in [('ordinary',48),('credit',16),('close',16),('shutdown',1)]:
+            for _ in range(count): request+=1;self.assertTrue(slots.admit(request,lane))
+        self.assertEqual(len(slots.pending),81)
+        self.assertFalse(slots.admit(82,'ordinary'))
+        for request in list(slots.pending): slots.reply(request,'COMPLETED_OR_CANCELLED')
+        self.assertEqual(len(slots.replies),82);self.assertFalse(slots.pending)
+
+if __name__=='__main__': unittest.main(verbosity=2)

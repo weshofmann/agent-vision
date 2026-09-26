@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""R3 disposable deterministic conceptual model; no PTY/kernel children/socket."""
+import json
+from threading import Event, Lock, Thread
+
+BOUNDARIES = ("before_open", "after_open", "after_spawn", "before_created", "after_created")
+
+class Model:
+    def __init__(self, boundary, mode):
+        self.boundary, self.mode = boundary, mode
+        self.lock = Lock()
+        self.at_barrier, self.release, self.cancel_committed = Event(), Event(), Event()
+        self.start_done, self.cancel_done = Event(), Event()
+        self.admitting = self.usable = True
+        self.registered = self.cancelled = self.published = self.session = self.ack = False
+        self.worker_fds = self.owner_fds = self.worker_child = self.owner_child = 0
+        self.opened = self.closed = self.spawned = self.reaped = 0
+        self.events, self.audit, self.errors = [], [], []
+
+    def check(self):
+        assert self.opened-self.closed == self.worker_fds+self.owner_fds
+        assert self.spawned-self.reaped == self.worker_child+self.owner_child
+
+    def barrier(self, name):
+        if name == self.boundary:
+            self.at_barrier.set()
+            assert self.release.wait(3), "barrier release timeout"
+
+    def adopt(self):
+        self.owner_fds += self.worker_fds
+        self.worker_fds = 0
+        self.owner_child += self.worker_child
+        self.worker_child = 0
+        self.audit.append("adopt_returned_resources")
+        self.check()
+
+    def cleanup(self):
+        self.adopt()  # Returned resources remain owned even when cancelled.
+        self.closed += self.owner_fds
+        self.owner_fds = 0
+        self.reaped += self.owner_child
+        self.owner_child = 0
+        self.audit.append("cleanup")
+        self.check()
+
+    def emit(self, kind, correlation=None):
+        assert self.usable
+        assert not self.ack, "event committed after Shutdown Ack"
+        self.events.append({"kind": kind, "correlation": correlation})
+
+    def admit(self):
+        with self.lock:
+            assert self.admitting
+            self.registered = True
+            self.audit.append("reserve_starting")
+
+    def startup(self):
+        try:
+            self.barrier("before_open")
+            with self.lock:
+                assert self.registered and not self.ack
+                if self.cancelled: return
+                self.opened += 2
+                self.worker_fds += 2  # master/slave returned but not adopted
+                self.audit.append("open")
+                self.check()
+            self.barrier("after_open")
+            with self.lock:
+                self.adopt()
+                if self.cancelled: return
+                assert not self.ack
+                self.spawned += 1
+                self.worker_child += 1  # returned child before registry adoption
+                self.audit.append("spawn")
+                self.check()
+            self.barrier("after_spawn")
+            with self.lock:
+                self.adopt()
+                if self.cancelled: return
+                self.closed += 1
+                self.owner_fds -= 1  # parent closes slave after spawn
+                self.audit.append("close_parent_slave")
+                self.check()
+            self.barrier("before_created")
+            with self.lock:
+                if self.cancelled: return
+                assert self.admitting and self.usable and not self.ack
+                self.session = self.published = True
+                self.emit("Created", "create")
+                self.audit.append("commit_created")
+            self.barrier("after_created")
+        except BaseException as exc:
+            self.errors.append(str(exc))
+        finally:
+            with self.lock:
+                if not self.published:
+                    self.cleanup()
+                    if self.usable: self.emit("Error(STATE)", "create")
+                self.audit.append("start_done")
+                self.start_done.set()
+
+    def cancel(self):
+        try:
+            with self.lock:
+                self.admitting = False
+                if self.mode == "EOF": self.usable = False
+                assert self.registered
+                self.cancelled = True
+                self.audit.append("cancel_all_reservations")
+                self.cancel_committed.set()
+            assert self.start_done.wait(3), "startup join timeout"
+            with self.lock:
+                if self.session:
+                    self.cleanup()
+                    if self.usable:
+                        self.emit("Exited")
+                        self.emit("Closed")
+                    self.session = False
+                assert self.opened == self.closed and self.spawned == self.reaped
+                assert self.start_done.is_set()
+                self.registered = False
+                if self.usable:
+                    self.emit("Ack(Shutdown)", "shutdown")
+                    self.ack = True
+                self.audit.append("connection_cleanup_done")
+        except BaseException as exc:
+            self.errors.append(str(exc))
+        finally:
+            self.cancel_done.set()
+
+    def run(self):
+        self.admit()
+        worker = Thread(target=self.startup, daemon=True)
+        worker.start()
+        assert self.at_barrier.wait(3), "startup barrier timeout"
+        closer = Thread(target=self.cancel, daemon=True)
+        closer.start()
+        assert self.cancel_committed.wait(3), "cancel admission timeout"
+        with self.lock:
+            assert self.cancelled and not self.admitting
+            assert not self.start_done.is_set()
+            assert not self.ack and not self.cancel_done.is_set()
+            self.check()
+        self.release.set()
+        worker.join(3)
+        closer.join(3)
+        assert not worker.is_alive() and not closer.is_alive()
+        assert not self.errors, self.errors
+        assert not self.registered and not self.session
+        assert self.opened == self.closed and self.spawned == self.reaped
+        assert self.audit[0] == "reserve_starting"
+        assert self.audit.index("start_done") < self.audit.index("connection_cleanup_done")
+        published = self.boundary == "after_created"
+        expected = (["Created","Exited","Closed","Ack(Shutdown)"] if published
+                    else ["Error(STATE)","Ack(Shutdown)"]) if self.mode == "Shutdown" else (["Created"] if published else [])
+        assert [e["kind"] for e in self.events] == expected
+        replies = [e["kind"] for e in self.events if e["correlation"] == "create"]
+        assert len(replies) == (1 if self.usable or published else 0)
+        return {"boundary": self.boundary, "cancellation": self.mode, "events": self.events,
+                "audit": self.audit, "fds_acquired": self.opened, "fds_closed": self.closed,
+                "children_spawned": self.spawned, "children_reaped": self.reaped,
+                "final_fds": self.opened-self.closed, "final_children": self.spawned-self.reaped,
+                "result": "PASS"}
+
+if __name__ == "__main__":
+    cases = [Model(b,m).run() for b in BOUNDARIES for m in ("Shutdown","EOF")]
+    print(json.dumps({"scope":"deterministic conceptual model; not kernel resource or protocol qualification",
+                      "cases":len(cases), "passed":len(cases), "results":cases}, indent=2))
