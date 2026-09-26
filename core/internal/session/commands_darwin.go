@@ -24,8 +24,9 @@ func (nativeCommandIO) Wait(ctx context.Context, fd int) error {
 	return (DarwinPoller{}).Wait(ctx, fd, true)
 }
 func (nativeCommandIO) Resize(fd int, rows, cols uint16) error {
-	// pty.Setsize calls File.Fd, which can undo nonblocking mode. The Resources
-	// contract instead supplies an immutable descriptor captured before SetNonblock.
+	// pty.Setsize calls File.Fd, while Resources requires the immutable descriptor
+	// captured before SetNonblock. Preserve that invariant without relying on
+	// os.File construction or nonblocking bookkeeping details.
 	size := pty.Winsize{Rows: rows, Cols: cols}
 	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&size)))
 	if err != 0 {
