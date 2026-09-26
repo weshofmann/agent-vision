@@ -2,8 +2,8 @@
 
 The [operator-approved PR #2 design](https://github.com/weshofmann/agent-vision/pull/2#issuecomment-5844056291)
 is now a small runnable AgentVision executable. The current tested code checkpoint
-is `476af409b61604ce7e5efdd580b27a735255d74f`, including the operator-authorized
-R1/R2 remediation below. PR #4 remains Draft; independent re-review and operator
+is `b5551db421b64dbce85e31bd27e2cc993ea611b2`, including the operator-authorized
+R1/R2 remediation below. PR #4 remains Draft; independent follow-up re-review and operator
 manual mouse qualification are required before acceptance.
 
 ## Components and ownership
@@ -143,14 +143,24 @@ close/survivor quit, owned resource cleanup and exact normal outer restoration.
 R2 (`476af40`) checks the effective tracked source against HEAD, including staged
 and unstaged changes, and recursively validates dependency gitlinks/cleanliness.
 All validation precedes application; rejection preserves files, HEAD and staged
-entries. Configured submodule-ignore settings cannot hide dependency edits. Ten
+entries. Configured submodule-ignore settings cannot hide dependency edits. The initial ten
 disposable real-Git fixtures cover clean/exact/already-staged accepted patch,
 unrelated staged/unstaged edits, staged/unstaged dependency edits, wrong dependency
 HEAD, nested tracked edits and ignored-dependency configuration. Seven original
-fixture cases failed against the reviewed helper; all ten now pass.
+fixture cases failed against the reviewed helper; all ten pass.
+
+[Independent re-review](https://github.com/weshofmann/agent-vision/pull/4#issuecomment-5844740894)
+closed R1 at `4b1a667` but retained R2: index flags still hid changed tracked bytes.
+Follow-up `b5551db` conservatively refuses `assume-unchanged`/`skip-worktree`
+entries in root and recursive dependencies before diff/application, without
+clearing flags or writing the index. Even clean flagged files are refused; use a
+fully materialized checkout without those flags. Eight new real-Git cases cover
+both flags at root/dependency/nested levels and clean flagged refusal. All eight
+failed against the prior guard; all eighteen cases now pass. Rejection snapshots
+also compare index flags. Independent R2 closure is pending at publication.
 
 The complete macOS suite is twelve CTest entries: nine lifecycle tests, one
-deterministic lock regression, one ten-case source-guard fixture suite, and one
+deterministic lock regression, one eighteen-case source-guard fixture suite, and one
 actual-desktop test with four outer-PTY scenarios. A fresh default FetchContent
 Debug build passes 12/12. The exact upstream revisions/notices remain unchanged;
 no source override, license choice, scope expansion or merge is included.

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source_code_sha": "476af409b61604ce7e5efdd580b27a735255d74f",
+  "source_code_sha": "b5551db421b64dbce85e31bd27e2cc993ea611b2",
   "qualified_platform": "macOS arm64",
   "build": "Debug; Apple Clang 21; CMake 3.31.10",
   "upstream_revisions": {
@@ -108,9 +108,9 @@
     "src/app.cpp": "166a6596689b196b28cae0608caa04b4ac7702714772a25377418316718e86c5",
     "src/window.cpp": "91cb1e00ed03a05a3017d5dbadf4de287174a53a77ac996b3cfeb6c1d6fac388",
     "CMakeLists.txt": "9bcb7cb24c2c35ef8d471dd981bf597841b90e68843af9cb459240cfb8e66d2b",
-    "cmake/apply_patch.py": "6b3c58ed8c7f8b0f66da6bf184a01a2caf58736eec9ccac5ae877297a13eca79",
+    "cmake/apply_patch.py": "6258a825c47b9e20085306646e821904ad3827d696f8e20f15a80e0a66deb652",
     "tests/scrollback_lock.cpp": "7010ab200270b0396af6d89ace4292564f23aa0f9d5299eea8916156208db3da",
-    "tests/test_source_guard.py": "e7a8ef9cde213174802337edb9429986719c5ffc4a61999cbac06b9604a9ca69"
+    "tests/test_source_guard.py": "3f0c348cdd7d82442b01863ae6622df511fea47856e9c1ca5d1f73f9efafb4ec"
   },
   "native_mouse": "operator manual qualification required before acceptance; not yet performed",
   "evidence_policy": "Whitelisted assertions/counts only; raw captures stay ignored and private. No PID, PTY name, username, hostname, environment dump or absolute workspace path is published.",
@@ -126,6 +126,6 @@
     "fixture": "real TerminalView draw/scrollbar broadcast and production publication method; test-only scheduling; inert descriptor, no child I/O",
     "actual_app": "80 finite scrolling rows, subsequent input/menu move/resize, confirmed close/survivor quit and owned cleanup"
   },
-  "r2_git_fixture_cases": 10,
-  "r2_guard": "HEAD-based effective tracked source, recursive gitlink identity/cleanliness, rejection preserves files/HEAD/staged entries before patch application"
+  "r2_git_fixture_cases": 18,
+  "r2_guard": "HEAD-based effective tracked source, recursive gitlink identity/cleanliness, read-only refusal of assume-unchanged/skip-worktree entries; rejection preserves files/HEAD/staged entries/index flags before patch application"
 }
