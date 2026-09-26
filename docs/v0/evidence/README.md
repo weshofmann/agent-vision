@@ -1,16 +1,64 @@
-# Probe evidence — checkpoint pending final verification
+# Observed probe results
 
-The unmodified pinned bundle builds and the outer-PTY interaction demonstrates
-core window/shell feasibility. Final exact-SHA verification and selected archived
-screens will replace this checkpoint note before operator review.
+Behavior tested at **`64f02bede3343e70ad09edd9512ce7048efb58f4`** on
+2026-09-26. Upstream code is unchanged at the three revisions in
+[provenance.json](provenance.json). Later main-merge/documentation commits do not
+change the probe code. This repository had no pre-existing product test suite.
 
-The exploratory qualified run observed shell B still in zombie state after its
-window closed (`82439 82425 Z`), while shell A remained alive (`82426 82425 Ss+`).
-This blocks product lifecycle qualification. App quit returned 0 and emitted
-alternate-screen entry/exit; cooked input was recovered. Immediate termios had
-only the macOS PENDIN bit added (difference 536870912); checking it again after
-input is pending. Do not claim byte-for-byte immediate termios restoration.
+## Commands actually run
 
-Probe tooling failures (pyte restore-decoding exception, ENOTTY after outer
-session leader exited, duplicate DSR responses) were corrected only in the
-throwaway driver. No upstream source modifications were made.
+```sh
+PROBE_PYTHON=/Users/devel/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 \
+  sh experiments/v0/build_probe.sh
+PYTHONPATH="$PWD/.probe/tools" \
+  /Users/devel/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 \
+  experiments/v0/interactive_probe.py .probe/build/tvterm .probe/final-both-moved
+/Users/devel/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 \
+  experiments/v0/verify_probe.py .probe/final-both-moved
+```
+
+The pinned build setup script completed successfully. The final driver and
+behavior verifier both exited 0. [results.json](results.json) records **core
+feasibility passed; V0 not fully tested**. No claim of production qualification.
+
+- Shell A PID 83605, shell B PID 83623, distinct child PTYs.
+- B inner size 25 rows × 83 columns, moved 15 columns/right and 5 rows/down.
+- A remains 37×118 until independently resized to 20×68, then moved
+  2 columns/right and 1 row/down. Front/back clipping changes with focus.
+- B exit produces Disconnected; closing it leaves A able to print SURVIVOR A.
+- This final run found only A in the owned-shell process sample after closing B.
+- App quit status 0; alternate-screen enter/leave sequences emitted.
+- Outer cooked input recovered with the exact sentinel `outer-check\n`.
+- Immediately after quit only `c_lflag` differed: PENDIN (536870912) was set.
+  After the input read **all** termios fields matched the original. Do not
+  claim immediate byte-for-byte equality or native-terminal visual restoration.
+
+## Intermittent cleanup failure
+
+An earlier uncommitted-driver run observed B still a zombie after B's window
+closed: `82439 82425 Z`, with A live as `82426 82425 Ss+`. The raw ordered steps
+and filtered process-state observation are in
+[exploratory-zombie-steps.json](exploratory-zombie-steps.json), distinct from final
+SHA-bound evidence. The final run reaped B; this variation leaves lifecycle
+qualification unresolved. Root cause is **not established**. The same final
+driver samples this condition; if it sees a zombie, `verify_probe.py` returns 1
+and prints the qualification failure. One passing run cannot dismiss it.
+
+Reproduce using the documented build/driver/verifier commands. Compare the
+`owned_shell_processes_after_b_close` event with B's PID from `03-shell-b.txt`.
+Do not run an unbounded stress loop to force a failure. Further tracing belongs
+to the proposed first implementation slice, after design approval.
+
+## Archive and interpretation
+
+Selected UTF-8 screen reconstructions are under [screens](screens/); full
+synthetic input steps, supervisor termios evidence and compressed raw ANSI output
+are retained. Copy hashes and raw gzip round-trip were verified against originals
+in the assigned worktree's ignored `.probe/`. The manifest records original
+absolute paths and SHA-256 values; no durable evidence relies on `/private/tmp`.
+Raw build/configure logs and toolchain inventory are retained alongside them.
+
+The reconstruction showed doubled OSC 0 titles. The raw ANSI output contains
+those titles as well; pyte rendering alone does not explain that anomaly. No
+upstream fix was attempted. Physical mouse/keyboard, full-screen apps, outer
+resize, signals, live-child close and descendants were not qualified.

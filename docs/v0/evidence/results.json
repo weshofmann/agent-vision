@@ -1,0 +1,12 @@
+{
+  "core_feasibility_checks": "passed",
+  "shell_a_pid": "83605",
+  "shell_b_pid": "83623",
+  "closed_b_reaped": true,
+  "owned_shell_metadata": [
+    "83605 83604 Ss+"
+  ],
+  "immediate_termios_equal": false,
+  "termios_equal_after_input": true,
+  "v0_qualification": "not fully tested"
+}

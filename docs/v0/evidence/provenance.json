@@ -1,0 +1,31 @@
+{
+  "observed_on": "2026-09-26",
+  "behavior_tested_sha": "64f02bede3343e70ad09edd9512ce7048efb58f4",
+  "upstream_tvterm": "210eb23564da06c358d2623388939bb02f7f3419",
+  "upstream_tvision": "640263136daa67b96a90c9bf6eb8816216ff76a3",
+  "upstream_libvterm_fork": "62b27d1db0c49eed55936a1bfa35102be91afe42",
+  "interaction_source_directory": "/Users/devel/workspace/agent-vision/.codex/worktrees/v0-feasibility/.probe/final-both-moved",
+  "exploratory_source": "/Users/devel/workspace/agent-vision/.codex/worktrees/v0-feasibility/.probe/interaction-qualified/steps.json",
+  "exploratory_driver_revision": "uncommitted earlier driver; process-state observation retained separately",
+  "binary_sha256": "0e3026aa3d2afd3b19ba69b7151ee569c47d2509f0f887c9b3b6490fd7962188",
+  "driver_sha256": "c207a1763f5498576456064ae02a66878a3614269e89cb5dd6d2c52bad90e513",
+  "verifier_sha256": "9d295fea055f3c565e77c0f2cb256587113968004bdb409880f4865e23d08cb4",
+  "archive_verified": "copied files byte-identical; gzip round-trip equals original raw ANSI",
+  "files_sha256": {
+    "screens/02-shell-a.txt": "e81e9468f96a77a6006b32a673793d384dc2e7abc795eb0d9780178d00178067",
+    "screens/03-shell-b.txt": "1a7684e4fc28dd06790877f6d0c7a5922df17a0da3724fae0afcabba2deba8c1",
+    "screens/05-b-resized-moved.txt": "4a71bf471b6bd19951b7e4a024c52bef834cc2e6a288e8074376d24314e9fa23",
+    "screens/06-focus-a.txt": "72f0e424c962d8363f4ef8d4f89db61a52ec96d486d14c77dd7412aa31a92f7a",
+    "screens/07-a-resized-overlap.txt": "6a1ca015454adac11f60f9c29c5e4b8b21d29883054a2d2d5f8db8ff4478dc89",
+    "screens/08-focus-b-overlap.txt": "58d3c2c5028b1ccbda1e7f2a3d16d2b2b628356429d7ef4aad610ad36c2c5c77",
+    "screens/09-b-exit.txt": "26be8901163c97e83578fbabb43bda245d61e7b4d88106d28218c76dd85c9e08",
+    "screens/10-a-survives.txt": "b1d0fb6f1d2bbec5924ee938c55917f62bacf32e54b65b5b91d4dc5eabc27b28",
+    "screens/11-a-exit.txt": "2dab67a1792e7c369ab906ace5adf81bda3a58c0f5a541588cd3b7bc328d696b",
+    "input-steps.json": "ac55c625222bfd63d863b21d7567968cee7de09e59eecb9b6c2a088ed91a485b",
+    "supervisor.json": "18c3bdce12f1385e23430506c1d30bd9ef5c88bd186a5e88573fb5d59455c4a5",
+    "outer-output.ansi.gz": "8dc29929e270748ea89a3b3ad87f7d503acbdddae7e9ecd79b45403ada091cf1",
+    "outer-output.ansi (decompressed)": "b47848571a5454fc5e1edd4f80ff762517eb4799194bb4da6a3e0e2e41a6b80b",
+    "results.json": "a600dd17a73ab9d7414971ab98b775ed56bb74795091d9a9ae8ff1de44d2cfc3",
+    "exploratory-zombie-steps.json": "e60ff8f5eb65265747a9b8ce9fc762e06e2781a15216e47b8802d4c14fd2dcc6"
+  }
+}
