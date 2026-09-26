@@ -66,7 +66,24 @@ is completed; this initial checkpoint makes no runtime-success claim.
   descriptor ownership; no current File.Fd reset defect is claimed. Linux stub
   compilation is not platform qualification. Reader/seal/ledger/server remain
   Tasks 5–6.
-- Tasks 5–6: pending.
+- Task 5 at `786fd2dc64131bbd04a8a1309d13804253fb478f`: matching-source
+  full race suite passed (protocol 1.219 seconds, server 1.452 seconds, session
+  4.588 seconds), vet passed, and controller post-commit module tests passed.
+  Coverage includes held reads through seal, all drain reasons, fake-clock drain
+  timing, short-policy credit timeout, credit-before-write-commit, native held
+  slave, cleanup retry ownership and joined monitors. Independent Astra/high
+  semantics review passed and requested Minor R1 for retained scheduler metadata.
+  The focused correction at `a8e5b4483c421c0d700f25cb8e7d9dfadfcbf953`
+  passed seven scheduler tests, scoped race (21.343 seconds), vet and controller
+  post-commit server tests. Old-source regressions fail the retained capacity
+  bounds; fixed queues compact while preserving FIFO and in-flight charges.
+  Independent scoped re-review closed R1 with no new breakage. Owned retained
+  slice metadata is bounded to 480 KiB on the qualified layout, with temporary
+  copies, in-flight storage and allocator/GC overhead separate; this is not a
+  total-process-memory guarantee. Actual socket/correlation/Shutdown delivery,
+  CLI and build integration remain Task 6. No new full-module race claim is
+  made for the metadata-only correction; final exact-SHA suites remain required.
+- Task 6: pending.
 - V0 clean baseline at `233485afa6da31950cf9ca05a9735a0f57b61489`: fresh
   Debug configure/build and all 12 CTests passed (23.54 seconds), including
   synthetic desktop PTY and terminal restoration checks. Qualified host:
