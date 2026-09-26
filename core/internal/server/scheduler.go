@@ -26,6 +26,19 @@ type eventQueue struct {
 	id    protocol.SessionID
 	items []scheduled
 }
+
+// compactItems releases historical high-water capacity without reallocating on
+// every dequeue. At each API boundary retained slots are <=2*queued events,
+// including zero slots for an empty queue whose last item is lent to the writer.
+func (q *eventQueue) compactItems() {
+	if cap(q.items) <= 2*len(q.items) {
+		return
+	}
+	items := make([]scheduled, len(q.items))
+	copy(items, q.items)
+	q.items = items
+}
+
 type Scheduler struct {
 	mu                                           sync.Mutex
 	queues                                       []eventQueue
@@ -41,6 +54,22 @@ const maxControls = 512
 
 func NewScheduler() *Scheduler { return &Scheduler{changed: make(chan struct{})} }
 func (s *Scheduler) notify()   { close(s.changed); s.changed = make(chan struct{}) }
+
+// Descriptor capacity obeys the same hysteresis. Each remaining queue owns at
+// least one queued or in-flight item, so global node policy bounds both slices.
+// Compaction retains payload references, ordering and cursor identities exactly;
+// one temporary metadata copy is separate from the retained-capacity bound.
+// The 2,048 output +512 control node limits permit at most5,120 retained slots
+// in each slice category:480KiB for 64-byte items and32-byte descriptors on the
+// qualified target, plus the sole in-flight item and allocator rounding.
+func (s *Scheduler) compactQueues() {
+	if cap(s.queues) <= 2*len(s.queues) {
+		return
+	}
+	queues := make([]eventQueue, len(s.queues))
+	copy(queues, s.queues)
+	s.queues = queues
+}
 func (s *Scheduler) Enqueue(e session.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,11 +123,13 @@ func (s *Scheduler) Enqueue(e session.Event) error {
 	for i := range s.queues {
 		if s.queues[i].id == e.Session {
 			s.queues[i].items = append(s.queues[i].items, item)
+			s.queues[i].compactItems()
 			s.notify()
 			return nil
 		}
 	}
 	s.queues = append(s.queues, eventQueue{id: e.Session, items: []scheduled{item}})
+	s.compactQueues()
 	s.notify()
 	return nil
 }
@@ -140,6 +171,7 @@ func (s *Scheduler) Next(ctx context.Context) (session.Event, error) {
 			copy(q.items, q.items[1:])
 			q.items[len(q.items)-1] = scheduled{}
 			q.items = q.items[:len(q.items)-1]
+			q.compactItems()
 			s.inflight = &item
 			s.cursor = (i + 1) % n
 			s.mu.Unlock()
@@ -183,6 +215,7 @@ func (s *Scheduler) Complete(e session.Event) {
 			}
 		}
 	}
+	s.compactQueues()
 	if len(s.queues) > 0 {
 		s.cursor %= len(s.queues)
 	} else {
