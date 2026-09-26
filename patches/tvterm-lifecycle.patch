@@ -1,0 +1,461 @@
+diff --git a/include/tvterm/pty.h b/include/tvterm/pty.h
+index f55c2b0..cc1d9ba 100644
+--- a/include/tvterm/pty.h
++++ b/include/tvterm/pty.h
+@@ -5,6 +5,7 @@
+ 
+ #if !defined(_WIN32)
+ #include <sys/types.h>
++#include <atomic>
+ #else
+ // Use Turbo Vision's windows.h, which omits several unneeded or unwanted
+ // definitions.
+@@ -45,10 +46,26 @@ bool createPty( PtyDescriptor &ptyDescriptor,
+ class PtyMaster
+ {
+     PtyDescriptor d;
++#if !defined(_WIN32)
++    std::atomic<bool> stopping {false};
++    std::atomic<int> status {-1}; // Raw wait status; -1 pending, -2 unavailable.
++    bool reaped {false}; // Reader owns waitpid; disconnect takes over after joins.
++    size_t exitDrainBytes {0};
++    bool pollExit() noexcept;
++#endif
+ 
+ public:
+ 
+     PtyMaster(PtyDescriptor ptyDescriptor) noexcept;
++#if !defined(_WIN32)
++    ~PtyMaster() { disconnect(); }
++    PtyMaster(const PtyMaster &) = delete;
++    PtyMaster &operator=(const PtyMaster &) = delete;
++    pid_t childPid() const noexcept { return d.clientPid; }
++    int childWaitStatus() const noexcept { return status.load(); }
++    void requestStop() noexcept { stopping = true; }
++    // disconnect/destruction require completed read/write workers.
++#endif
+ 
+     bool readFromClient(TSpan<char> data, size_t &bytesRead) noexcept;
+     bool writeToClient(TSpan<const char> data) noexcept;
+diff --git a/include/tvterm/termctrl.h b/include/tvterm/termctrl.h
+index a18c9b1..caede15 100644
+--- a/include/tvterm/termctrl.h
++++ b/include/tvterm/termctrl.h
+@@ -8,6 +8,7 @@
+ #include <tvterm/pty.h>
+ #include <atomic>
+ #include <memory>
++#include <thread>
+ 
+ namespace tvterm
+ {
+@@ -23,6 +24,13 @@ public:
+                                      void (&onError)(const char *reason) ) noexcept;
+     // Takes ownership over 'this'.
+     void shutDown() noexcept;
++#if !defined(_WIN32)
++    // UI-thread only, outside lockState callbacks. Keeps retained terminal state.
++    // Idempotently stops, joins, closes and reaps; returns raw wait status.
++    int finish() noexcept;
++    pid_t childPid() const noexcept { return ptyMaster.childPid(); }
++    int childWaitStatus() const noexcept { return ptyMaster.childWaitStatus(); }
++#endif
+ 
+     void sendEvent(const TerminalEvent &event) noexcept;
+ 
+@@ -46,7 +54,13 @@ private:
+     std::atomic<bool> updated {false};
+     std::atomic<bool> disconnected {false};
+ 
++#if !defined(_WIN32)
++    std::thread writerThread;
++    std::thread readerThread;
++    bool finished {false};
++#else
+     std::shared_ptr<TerminalController> selfOwningPtr;
++#endif
+ 
+     TerminalController(TPoint, TerminalEmulatorFactory &, PtyDescriptor) noexcept;
+     ~TerminalController();
+diff --git a/source/tvterm-core/pty.cc b/source/tvterm-core/pty.cc
+index 86e9008..7cd60ec 100644
+--- a/source/tvterm-core/pty.cc
++++ b/source/tvterm-core/pty.cc
+@@ -12,6 +12,13 @@
+ #include <sys/wait.h>
+ #include <termios.h>
+ #include <errno.h>
++#include <poll.h>
++#include <chrono>
++#include <sys/stat.h>
++#include <string>
++#include <vector>
++
++extern char **environ;
+ 
+ #if __has_include(<pty.h>)
+ #   include <pty.h>
+@@ -33,35 +40,43 @@ bool createPty( PtyDescriptor &ptyDescriptor, TPoint size,
+ {
+     auto termios = createTermios();
+     auto winsize = createWinsize(size);
++    // Prepare all allocating/environment work before forking a threaded app.
++    std::vector<std::string> environment;
++    for (char **entry = environ; *entry; ++entry) environment.emplace_back(*entry);
++    auto setVariable = [&] (const char *name, const char *value) {
++        std::string prefix = std::string(name) + "=";
++        for (auto &entry : environment)
++            if (entry.compare(0, prefix.size(), prefix) == 0)
++            { entry = prefix + value; return; }
++        environment.push_back(prefix + value);
++    };
++    for (const auto &var : customEnvironment) setVariable(var.name, var.value);
++    std::string shell;
++    for (const auto &entry : environment)
++        if (entry.compare(0, 6, "SHELL=") == 0) shell = entry.substr(6);
++    struct stat shellInfo {};
++    if (shell.empty() || shell[0] != '/' || stat(shell.c_str(), &shellInfo) != 0 ||
++        !S_ISREG(shellInfo.st_mode) || access(shell.c_str(), X_OK) != 0)
++        shell = "/bin/sh";
++    setVariable("SHELL", shell.c_str());
++    std::vector<char *> childEnvironment;
++    for (auto &entry : environment) childEnvironment.push_back(&entry[0]);
++    childEnvironment.push_back(nullptr);
++    char *args[] = {&shell[0], nullptr};
++
+     int masterFd;
+     pid_t clientPid = forkpty(&masterFd, nullptr, &termios, &winsize);
+     if (clientPid == 0)
+     {
+-        // Use the default ISIG signal handlers.
+-        signal(SIGINT,  SIG_DFL);
+-        signal(SIGQUIT, SIG_DFL);
+-        signal(SIGSTOP, SIG_DFL);
+-        signal(SIGCONT, SIG_DFL);
+-
+-        for (const auto &envVar : customEnvironment)
+-            setenv(envVar.name, envVar.value, 1);
+-
+-        char *shell = getenv("SHELL");
+-        char *args[] = {shell, nullptr};
+-        execvp(shell, args);
+-
+-        setbuf(stderr, nullptr); // Ensure 'stderr' is unbuffered.
+-        fprintf(
+-            stderr,
+-            "\x1B[1;31m" // Color attributes: bold and red.
+-            "Error: Failed to execute the program specified by the environment variable SHELL ('%s'): %s"
+-            "\x1B[0m", // Reset color attributes.
+-            (shell ? shell : ""),
+-            strerror(errno)
+-        );
+-
+-        // Exit the subprocess without cleaning up resources.
+-        _Exit(EXIT_FAILURE);
++        // After fork: async-signal-safe operations only until exec/_exit.
++        for (int sig : {SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGPIPE, SIGCHLD,
++                        SIGTSTP, SIGCONT, SIGWINCH})
++            signal(sig, SIG_DFL);
++        execve(shell.c_str(), args, childEnvironment.data());
++        const char error[] = "Cannot execute terminal shell\n";
++        ssize_t ignored = write(STDERR_FILENO, error, sizeof(error) - 1);
++        (void) ignored;
++        _exit(127);
+     }
+     else if (clientPid == -1)
+     {
+@@ -70,48 +85,79 @@ bool createPty( PtyDescriptor &ptyDescriptor, TPoint size,
+         delete[] str;
+         return false;
+     }
++    if (fcntl(masterFd, F_SETFD, FD_CLOEXEC) == -1 ||
++        fcntl(masterFd, F_SETFL, fcntl(masterFd, F_GETFL) | O_NONBLOCK) == -1)
++    {
++        close(masterFd);
++        kill(clientPid, SIGKILL);
++        while (waitpid(clientPid, nullptr, 0) == -1 && errno == EINTR) {}
++        onError("Cannot configure owned PTY master");
++        return false;
++    }
+     ptyDescriptor = {masterFd, clientPid};
+     return true;
+ }
+ 
++bool PtyMaster::pollExit() noexcept
++{
++    if (reaped) return true;
++    int value;
++    pid_t result;
++    do { result = waitpid(d.clientPid, &value, WNOHANG); }
++    while (result == -1 && errno == EINTR);
++    if (result == d.clientPid || result == -1)
++    {
++        // ECHILD/other wait errors never justify signalling a possibly reused PID.
++        reaped = true;
++        status = result == d.clientPid ? value : -2;
++    }
++    return reaped;
++}
++
+ bool PtyMaster::readFromClient(TSpan<char> data, size_t &bytesRead) noexcept
+ {
+     bytesRead = 0;
+-    if (data.size() > 1)
++    while (!stopping)
+     {
+-        ssize_t r = read(d.masterFd, &data[0], 1);
+-        if (r < 0)
+-            return false;
+-        else if (r > 0)
++        bool exited = pollExit();
++        // Drain bounded queued output, even if a descendant keeps writing.
++        if (exited && exitDrainBytes >= 65536) return false;
++        pollfd fd {d.masterFd, POLLIN, 0};
++        int ready = poll(&fd, 1, exited ? 0 : 25);
++        if (ready < 0) { if (errno == EINTR) continue; return false; }
++        if (ready == 0) { if (exited) return false; continue; }
++        ssize_t count = read(d.masterFd, data.data(), data.size());
++        if (count > 0)
+         {
+-            bytesRead += r;
+-            int availableBytes = 0;
+-            if ( ioctl(d.masterFd, FIONREAD, &availableBytes) != -1 &&
+-                 availableBytes > 0 )
+-            {
+-                size_t bytesToRead = min(availableBytes, data.size() - 1);
+-                r = read(d.masterFd, &data[1], bytesToRead);
+-                if (r < 0)
+-                    return false;
+-                bytesRead += r;
+-            }
++            bytesRead = count;
++            if (exited) exitDrainBytes += count;
++            return true;
+         }
++        if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
++        // EOF can become visible just before the direct-child wait status.
++        for (int retry = 0; retry < 20 && !pollExit() && !stopping; ++retry)
++            poll(nullptr, 0, 5);
++        return false;
+     }
+-    return true;
++    return false;
+ }
+ 
+ bool PtyMaster::writeToClient(TSpan<const char> data) noexcept
+ {
+     size_t written = 0;
+-    while (written < data.size())
++    while (written < data.size() && !stopping)
+     {
+-        size_t bytesToWrite = data.size() - written;
+-        ssize_t r = write(d.masterFd, &data[written], bytesToWrite);
+-        if (r < 0)
+-            return false;
+-        written += r;
++        ssize_t count = write(d.masterFd, &data[written], data.size() - written);
++        if (count > 0) written += count;
++        else if (count < 0 && errno == EINTR) continue;
++        else if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
++        {
++            pollfd fd {d.masterFd, POLLOUT, 0};
++            if (poll(&fd, 1, 25) < 0 && errno != EINTR) return false;
++        }
++        else return false;
+     }
+-    return true;
++    return written == data.size();
+ }
+ 
+ void PtyMaster::resizeClient(TPoint size) noexcept
+@@ -125,16 +171,27 @@ void PtyMaster::resizeClient(TPoint size) noexcept
+ 
+ void PtyMaster::disconnect() noexcept
+ {
++    if (d.masterFd == -1) return;
++    stopping = true;
++    bool exited = pollExit();
+     close(d.masterFd);
+-    // Send a SIGHUP, then a SIGKILL after a while if the process is not yet
+-    // terminated, like most terminal emulators do.
++    d.masterFd = -1;
++    if (exited) return;
++    // Closing the master provides normal terminal hangup to attached jobs.
++    // Only the owned, unreaped direct PID is signalled explicitly.
+     kill(d.clientPid, SIGHUP);
+-    sleep(1);
+-    if (waitpid(d.clientPid, nullptr, WNOHANG) != d.clientPid)
++    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
++    while (!pollExit() && std::chrono::steady_clock::now() < deadline)
++        poll(nullptr, 0, 5);
++    if (!reaped)
+     {
+         kill(d.clientPid, SIGKILL);
+-        while( waitpid(d.clientPid, nullptr, 0) != d.clientPid &&
+-               errno == EINTR );
++        int value;
++        pid_t result;
++        do { result = waitpid(d.clientPid, &value, 0); }
++        while (result == -1 && errno == EINTR);
++        reaped = true;
++        status = result == d.clientPid ? value : -2;
+     }
+ }
+ 
+diff --git a/source/tvterm-core/termctrl.cc b/source/tvterm-core/termctrl.cc
+index 3010d22..248e204 100644
+--- a/source/tvterm-core/termctrl.cc
++++ b/source/tvterm-core/termctrl.cc
+@@ -47,11 +47,11 @@ struct TerminalController::TerminalEventLoop
+ 
+     // Used for indicating whether event processing should be stopped because
+     // the terminal was shut down by the application.
+-    bool terminated {false};
++    std::atomic<bool> terminated {false};
+ 
+     // Used for sending events from the main thread to the TerminalEventLoop's
+-    // threads. Has its own mutex to avoid blocking the main thread for long.
+-    Mutex<std::queue<TerminalEvent>> eventQueue;
++    // threads. Condition mutations and waits share mutex, preventing lost wakes.
++    std::queue<TerminalEvent> eventQueue;
+ 
+     // Used for waking up the WriterLoop a short time after data was received
+     // by the ReaderLoop thread.
+@@ -92,6 +92,14 @@ TerminalController *TerminalController::create( TPoint size,
+                                                         terminalEmulatorFactory,
+                                                         ptyDescriptor );
+ 
++#if !defined(_WIN32)
++    terminalController.writerThread = std::thread([&terminalController] {
++        terminalController.eventLoop.runWriterLoop();
++    });
++    terminalController.readerThread = std::thread([&terminalController] {
++        terminalController.eventLoop.runReaderLoop();
++    });
++#else
+     // 'this' will be deleted when:
+     // 1. 'shutDown()' is invoked from the main thread.
+     // 2. Both the WriterLoop and ReaderLoop threads exit.
+@@ -108,17 +116,44 @@ TerminalController *TerminalController::create( TPoint size,
+         owningPtr->eventLoop.runReaderLoop();
+     }).detach();
+ 
++#endif
++
+     return &terminalController;
+ }
+ 
++#if !defined(_WIN32)
++int TerminalController::finish() noexcept
++{
++    if (!finished)
++    {
++        {
++            std::lock_guard<std::mutex> lock(eventLoop.mutex);
++            eventLoop.terminated = true;
++        }
++        ptyMaster.requestStop();
++        eventLoop.condVar.notify_all();
++        if (readerThread.joinable()) readerThread.join();
++        if (writerThread.joinable()) writerThread.join();
++        ptyMaster.disconnect();
++        finished = true;
++    }
++    return childWaitStatus();
++}
++#endif
++
+ void TerminalController::shutDown() noexcept
+ {
++#if !defined(_WIN32)
++    finish();
++    delete this;
++#else
+     {
+         std::lock_guard<std::mutex> lock(eventLoop.mutex);
+         eventLoop.terminated = true;
+     }
+     eventLoop.condVar.notify_one();
+-    selfOwningPtr.reset(); // May delete 'this'.
++    selfOwningPtr.reset();
++#endif
+ }
+ 
+ TerminalController::TerminalController( TPoint size,
+@@ -138,9 +173,11 @@ TerminalController::~TerminalController()
+ 
+ void TerminalController::sendEvent(const TerminalEvent &event) noexcept
+ {
+-    eventLoop.eventQueue.lock([&] (auto &eventQueue) {
+-        eventQueue.push(event);
+-    });
++    {
++        std::lock_guard<std::mutex> lock(eventLoop.mutex);
++        if (eventLoop.terminated || disconnected) return;
++        eventLoop.eventQueue.push(event);
++    }
+     eventLoop.condVar.notify_one();
+ }
+ 
+@@ -152,16 +189,16 @@ void TerminalController::TerminalEventLoop::runWriterLoop() noexcept
+         bool updated = false;
+         {
+             std::unique_lock<std::mutex> lock(mutex);
+-            if (currentTimeout != TimePoint())
++            condVar.wait(lock, [&] {
++                return terminated || !eventQueue.empty() || currentTimeout != TimePoint();
++            });
++            if (!terminated && eventQueue.empty() && currentTimeout != TimePoint())
+                 condVar.wait_until(lock, currentTimeout);
+-            else
+-                // Waiting until 'TimePoint()' is not always supported,
+-                // so use a regular 'wait'.
+-                condVar.wait(lock);
+-
+             if (terminated)
+             {
++#if defined(_WIN32)
+                 ctrl.ptyMaster.disconnect();
++#endif
+                 break;
+             }
+ 
+@@ -188,7 +225,18 @@ void TerminalController::TerminalEventLoop::runReaderLoop() noexcept
+ 
+         if (!readOk || bytesRead == 0)
+         {
+-            ctrl.disconnected = true;
++            {
++                std::lock_guard<std::mutex> lock(mutex);
++                bool updated = false;
++                currentTimeout = TimePoint();
++                updateState(updated); // Publish all final emulator output.
++                ctrl.disconnected = true;
++                terminated = true;
++            }
++#if !defined(_WIN32)
++            ctrl.ptyMaster.requestStop();
++#endif
++            condVar.notify_all();
+             notifyMainThread();
+             break;
+         }
+@@ -233,13 +281,11 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+         bool hasEvent;
+         TerminalEvent event;
+ 
+-        eventQueue.lock([&] (auto &eventQueue) {
+-            if ((hasEvent = !eventQueue.empty()))
+-            {
+-                event = eventQueue.front();
+-                eventQueue.pop();
+-            }
+-        });
++        if ((hasEvent = !eventQueue.empty()))
++        {
++            event = eventQueue.front();
++            eventQueue.pop();
++        }
+ 
+         if (!hasEvent)
+             break;

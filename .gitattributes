@@ -1,0 +1,2 @@
+# Patch context represents blank lines with a literal space; preserve its format.
+patches/*.patch -whitespace
