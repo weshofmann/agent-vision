@@ -1,9 +1,10 @@
 # First retained terminal desktop slice
 
 The [operator-approved PR #2 design](https://github.com/weshofmann/agent-vision/pull/2#issuecomment-5844056291)
-is now a small runnable AgentVision executable. The tested application commit is
-`5d0cd31d9bf91af90dc8c0fe3ad48e3ed975a34d`; later report/evidence commits do not
-change that code. PR #4 remains Draft at the implementation-review boundary.
+is now a small runnable AgentVision executable. The current tested code checkpoint
+is `476af409b61604ce7e5efdd580b27a735255d74f`, including the operator-authorized
+R1/R2 remediation below. PR #4 remains Draft; independent re-review and operator
+manual mouse qualification are required before acceptance.
 
 ## Components and ownership
 
@@ -39,7 +40,7 @@ clearance is claimed. [Notices](../../THIRD_PARTY_NOTICES.md).
 ## Reproduction and observed evidence
 
 Follow [build/setup commands](../../README.md). A fresh default FetchContent Debug
-build with CMake 3.31.10 and Apple Clang 21 on macOS arm64 passed all ten CTest
+build with CMake 3.31.10 and Apple Clang 21 on macOS arm64 passed all twelve CTest
 cases. It did not use a prepatched source override. A second configure recognized
 the already-applied exact patch. The sanitized [evidence summary](terminal-desktop-evidence.json)
 records source hashes, exact revisions, assertions and resource counts.
@@ -69,7 +70,7 @@ Observed through the **actual application** in a synthetic 120×40 outer PTY:
   released two workers and one master FD. These are counts for the owned app PID,
   not a process or descriptor-name dump.
 - Foreground `sleep` received Ctrl-C through the real input path and returned
-  control to the shell. All three normal shutdown scenarios restored exact outer
+  control to the shell. All four normal shutdown scenarios restored exact outer
   termios, cooked line input, alternate-screen exit and application status 0.
   Startup also handled inherited SIGCHLD-ignore disposition.
 
@@ -89,11 +90,12 @@ small resource/geometry counts, reproducible platform/tool versions and hashes.
 
 ## Gaps and review decisions
 
-Physical mouse movement/resizing in native Terminal is **unqualified**: the
+Physical mouse movement/resizing in native Terminal is **unqualified and required
+by the operator before acceptance**: the
 computer-use tool refused `com.apple.Terminal` for safety reasons. No alternate
 UI-control bypass was attempted. Turbo Vision frame behavior is reused; source
-reuse is not physical mouse evidence. Operator manual mouse qualification remains
-an explicit review decision rather than an implied pass.
+reuse is not physical mouse evidence. Operator manual mouse qualification is pending; a short checklist will be provided
+after independent R1/R2 closure.
 
 The ownership guarantee is for known direct children, controllers, workers and
 master descriptors. PTY close supplies normal foreground hangup semantics;
@@ -114,3 +116,41 @@ parent runtime offers no effective model/effort selector/introspection; use the
 available session without claiming a switch. Independent review requests advertised
 GPT-6 Astra/high for the subtle concurrency; report effective settings only if
 observable. No project `.kin/config` is present.
+
+## Operator-authorized R1/R2 remediation
+
+[Operator review](https://github.com/weshofmann/agent-vision/pull/4#issuecomment-5844558989)
+confirmed R1's opposing state/emulator lock order and R2's index-relative source
+guard gap; authorized only their bounded repair/regressions.
+
+R1 (`1a965ee`) isolates queue/wakeup synchronization from emulator serialization.
+Enqueue/dequeue, writer wake and stop predicates use the same queue mutex; the
+writer releases it before acquiring the emulator mutex/state. Reader wake flags
+remain set until consumed, and timeout fields stay under emulator serialization.
+No scrollbar updates were disabled. The four-file upstream patch remains narrow.
+
+A deterministic fixture coordinates actual TerminalView draw/scrollbar broadcast
+with the production worker publication method under emulator serialization. Test
+compilation exposes controller internals for scheduling only; no product hook or
+child I/O is involved. The reviewed patch fails explicitly at the three-second
+watchdog, with the exact lock cycle confirmed in a private stack sample. The fix
+completes and delivers the real scrollbar event to the real emulator. This is
+controlled dynamic evidence, distinct from the original inconclusive marker probe.
+The actual outer-PTY app also renders 80 finite scrolling rows, accepts subsequent
+input/menu move/resize, reports the resized child size, and completes confirmed
+close/survivor quit, owned resource cleanup and exact normal outer restoration.
+
+R2 (`476af40`) checks the effective tracked source against HEAD, including staged
+and unstaged changes, and recursively validates dependency gitlinks/cleanliness.
+All validation precedes application; rejection preserves files, HEAD and staged
+entries. Configured submodule-ignore settings cannot hide dependency edits. Ten
+disposable real-Git fixtures cover clean/exact/already-staged accepted patch,
+unrelated staged/unstaged edits, staged/unstaged dependency edits, wrong dependency
+HEAD, nested tracked edits and ignored-dependency configuration. Seven original
+fixture cases failed against the reviewed helper; all ten now pass.
+
+The complete macOS suite is twelve CTest entries: nine lifecycle tests, one
+deterministic lock regression, one ten-case source-guard fixture suite, and one
+actual-desktop test with four outer-PTY scenarios. A fresh default FetchContent
+Debug build passes 12/12. The exact upstream revisions/notices remain unchanged;
+no source override, license choice, scope expansion or merge is included.
