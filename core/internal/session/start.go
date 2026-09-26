@@ -21,14 +21,22 @@ func (m *Manager) start(r *reservation, window uint32) {
 	if err == nil && resources != nil && resources.Process != nil && r.ctx.Err() == nil && !m.stopping {
 		r.commandWake = make(chan struct{}, 1)
 		r.commandCtx, r.commandCancel = context.WithCancel(r.ctx)
-		r.ioWorkers.Add(1) // registration before Created and startDone publication
+		r.ledger = newDeliveryLedger(r.id, m.outputBudget)
+		r.sealed = make(chan struct{})
+		r.naturalDone = make(chan struct{})
+		r.monitorDone = make(chan struct{})
+		m.monitorWorkers.Add(1)
+		r.ioWorkers.Add(2) // registration before Created and startDone publication
 		r.published = true
 		r.state = live
 		m.emitLocked(Event{Session: r.id, Request: r.request, Message: protocol.SessionCreated{Rows: r.config.Rows, Cols: r.config.Cols, AcceptedWindow: window}})
 		m.mu.Unlock()
 		go m.runCommands(r, resources.MasterFD)
 		go m.observe(r, done)
-		// Task5 reader may only begin after this commit.
+		go m.finishNatural(r)
+		go m.runOutput(r, resources.MasterFD)
+		go m.watchCredit(r)
+		// Reader starts only after Created admission.
 		return
 	}
 	m.mu.Unlock()
@@ -106,11 +114,18 @@ func (m *Manager) cleanupAttempt(ctx context.Context, r *reservation) (err error
 		// A stuck join keeps this owner reachable; callers still have their watchdog.
 		r.ioWorkers.Wait()
 		if r.resources != nil {
-			err = r.resources.Rollback(ctx)
+			err = m.rollbackJoined(ctx, r)
 		}
 		if err == nil {
 			select {
 			case <-r.observed:
+				if r.published {
+					select {
+					case <-r.naturalDone:
+					case <-ctx.Done():
+						err = ctx.Err()
+					}
+				}
 			case <-ctx.Done():
 				err = ctx.Err()
 			}
@@ -127,10 +142,11 @@ func (m *Manager) cleanupAttempt(ctx context.Context, r *reservation) (err error
 		return err
 	}
 	if r.published {
-		// No reader exists in Task3; explicit close admits no output. Task5 replaces
-		// this with reader seal/sequence accounting before Exited publication.
-		m.emitLocked(Event{Session: r.id, Message: protocol.SessionExited{Status: r.result.Status, DrainReason: protocol.DrainExplicitClose}})
-		m.emitLocked(Event{Session: r.id, Request: r.closeRequest, Message: protocol.SessionClosed{}})
+		m.publishExitLocked(r)
+		m.emitLocked(Event{Session: r.id, Request: r.closeRequest, Message: protocol.SessionClosed{LastOutputSequence: r.sequence}})
+	}
+	if r.ledger != nil {
+		r.ledger.retire()
 	}
 	delete(m.records, r.id)
 	return nil
@@ -144,10 +160,22 @@ func (m *Manager) observe(r *reservation, done <-chan ProcessResult) {
 	}
 	m.mu.Lock()
 	r.result = v
+	r.exitAt = m.now()
+	if r.readWaitCancel != nil {
+		r.readWaitCancel()
+	}
 	r.commandCancel() // end command I/O; lifetime context remains available for Task5 drain
 	if r.state == live {
 		r.state = draining
 	}
 	m.mu.Unlock()
 	close(r.observed)
+}
+
+// Resource completion is serialized for natural seal and explicit cleanup. A
+// deadline preserves the same retryable owner; FD workers join before any close.
+func (m *Manager) rollbackJoined(ctx context.Context, r *reservation) error {
+	r.resourceCleanupMu.Lock()
+	defer r.resourceCleanupMu.Unlock()
+	return r.resources.Rollback(ctx)
 }

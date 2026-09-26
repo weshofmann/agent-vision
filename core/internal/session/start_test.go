@@ -100,7 +100,7 @@ func testStartingBarriers(t *testing.T, eof bool) {
 				}
 				return r, nil
 			})
-			m := NewManager(policy.Default(), sp, s)
+			m := newFixtureManager(policy.Default(), sp, s)
 			create(t, m, 1)
 			if stage == "after-created" {
 				s.await(t, 1)
@@ -195,7 +195,7 @@ func TestStartupFailureRollback(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			var r *Resources
 			s := newSink()
-			m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+			m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 				if step != "open" {
 					a, b, e := os.Pipe()
 					if e != nil {
@@ -229,7 +229,7 @@ func TestStartingCancellationDuringRollback(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	s := newSink()
 	var once sync.Once
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return &Resources{rollback: func(context.Context) error { once.Do(func() { close(entered) }); <-release; return nil }}, errors.New("synthetic spawn failure")
 	}), s)
 	create(t, m, 1)

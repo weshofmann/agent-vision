@@ -35,7 +35,7 @@ func (f commandFixture) Wait(ctx context.Context, fd int) error {
 func commandManager(t *testing.T, io commandIO, p policy.Policy) (*Manager, *recordingSink, protocol.SessionID) {
 	t.Helper()
 	s := newSink()
-	m := NewManager(p, spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(p, spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return fixtureResources(newFixtureProcess()), nil
 	}), s)
 	m.commandIO = io
@@ -207,7 +207,7 @@ func testCommandCancel(t *testing.T, stop, abort bool) {
 	res := fixtureResources(pr)
 	rollback := res.rollback
 	res.rollback = func(ctx context.Context) error { once.Do(func() { close(rolled) }); return rollback(ctx) }
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return res, nil }), s)
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return res, nil }), s)
 	m.commandIO = io
 	create(t, m, 1)
 	id := s.await(t, 1)[0].Session
@@ -258,7 +258,7 @@ func TestTwoSessionCommands(t *testing.T) {
 	}}
 	s := newSink()
 	next := 10
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		next++
 		r := fixtureResources(newFixtureProcess())
 		r.MasterFD = next
@@ -319,7 +319,7 @@ func TestCommandNaturalExitCancelsQueued(t *testing.T) {
 	}}
 	s := newSink()
 	pr := newFixtureProcess()
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return fixtureResources(pr), nil }), s)
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return fixtureResources(pr), nil }), s)
 	m.commandIO = io
 	t.Cleanup(func() { shutdown(t, m) })
 	create(t, m, 1)

@@ -83,7 +83,7 @@ func TestReservationLimit(t *testing.T) {
 	entered := make(chan struct{}, 16)
 	release := make(chan struct{})
 	s := newSink()
-	m := NewManager(policy.Default(), spawnFunc(func(ctx context.Context, _ SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(ctx context.Context, _ SpawnConfig) (*Resources, error) {
 		entered <- struct{}{}
 		<-release
 		return nil, ctx.Err()
@@ -110,7 +110,7 @@ func TestReservationLimit(t *testing.T) {
 // Catches reuse across release and failure to isolate backend runs by epoch.
 func TestOpaqueEpochIDs(t *testing.T) {
 	s := newSink()
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return completedResources(protocol.ExitStatus{Kind: 1, Value: 17}), nil
 	}), s)
 	seen := map[protocol.SessionID]bool{}
@@ -131,7 +131,7 @@ func TestOpaqueEpochIDs(t *testing.T) {
 		}
 		errorCode(t, m.Admit(frame(t, protocol.CloseSession{}, 1000, id)), protocol.ErrorUnknownSession)
 	}
-	other := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return nil, errors.New("unused") }), newSink())
+	other := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) { return nil, errors.New("unused") }), newSink())
 	if m.Epoch() == other.Epoch() || m.Epoch() == ([16]byte{}) {
 		t.Fatal("epoch failed run isolation")
 	}
@@ -142,7 +142,7 @@ func TestOpaqueEpochIDs(t *testing.T) {
 // Catches loss of typed status before explicit Close.
 func TestStartupExitedRecord(t *testing.T) {
 	s := newSink()
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return completedResources(protocol.ExitStatus{Kind: 1, Value: 17}), nil
 	}), s)
 	create(t, m, 1)
@@ -161,7 +161,7 @@ func TestStartupExitedRecord(t *testing.T) {
 // Catches natural completion freeing a reservation before Close releases it.
 func TestReservationExitedLimit(t *testing.T) {
 	s := newSink()
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return completedResources(protocol.ExitStatus{Kind: 1, Value: 17}), nil
 	}), s)
 	for i := 1; i <= 16; i++ {
@@ -180,7 +180,7 @@ func TestStartupUncertainCleanup(t *testing.T) {
 	p.done <- ProcessResult{Status: protocol.ExitStatus{Kind: 3}, Err: uncertain}
 	close(p.done)
 	close(p.complete)
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return &Resources{Process: p, rollback: func(context.Context) error { return uncertain }}, nil
 	}), s)
 	create(t, m, 1)
@@ -214,7 +214,7 @@ func TestStartingWatchdogLateReturn(t *testing.T) {
 	p := policy.Default()
 	p.CleanupTimeout = 10 * time.Millisecond
 	s := newSink()
-	m := NewManager(p, spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(p, spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		close(entered)
 		<-release
 		return &Resources{rollback: func(context.Context) error { once.Do(func() { close(rolled) }); return nil }}, nil
@@ -252,7 +252,7 @@ func TestStartupCleanupRetryAfterCloseDeadline(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
 	first := make(chan struct{})
-	m := NewManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
 		return &Resources{Process: p, rollback: func(context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()

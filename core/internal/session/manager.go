@@ -7,13 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/weshofmann/agent-vision/core/internal/policy"
 	"github.com/weshofmann/agent-vision/core/internal/protocol"
 )
 
-// OutputTicket is declaration-only scaffolding. Task 5 owns delivery accounting.
-type OutputTicket struct{}
 type Event struct {
 	Session protocol.SessionID
 	Message protocol.Message
@@ -35,34 +34,45 @@ const (
 	live
 	draining
 	closing
+	exited
 )
 
 type reservation struct {
-	id              protocol.SessionID
-	request         protocol.RequestID
-	config          SpawnConfig
-	ctx             context.Context
-	cancel          context.CancelFunc
-	state           sessionState
-	published       bool
-	resources       *Resources // startup writes; startDone publishes ownership
-	startDone       chan struct{}
-	observed        chan struct{}
-	result          ProcessResult  // observed closes after the sole Process.Done read
-	ioWorkers       sync.WaitGroup // FD workers: register before startDone, join before rollback
-	cleanupMu       sync.Mutex
-	cleanupRunning  bool
-	cleanupComplete bool
-	cleanupDone     chan struct{}
-	cleanupErr      error
-	closeRequest    protocol.RequestID
-	commandCtx      context.Context
-	commandCancel   context.CancelFunc
-	commands        [policy.OrdinarySlots]command
-	commandHead     int
-	commandQueued   int
-	inputBytes      int
-	commandWake     chan struct{}
+	id                protocol.SessionID
+	request           protocol.RequestID
+	config            SpawnConfig
+	ctx               context.Context
+	cancel            context.CancelFunc
+	state             sessionState
+	published         bool
+	resources         *Resources // startup writes; startDone publishes ownership
+	startDone         chan struct{}
+	observed          chan struct{}
+	result            ProcessResult  // observed closes after the sole Process.Done read
+	ioWorkers         sync.WaitGroup // FD workers: register before startDone, join before rollback
+	cleanupMu         sync.Mutex
+	resourceCleanupMu sync.Mutex
+	cleanupRunning    bool
+	cleanupComplete   bool
+	cleanupDone       chan struct{}
+	cleanupErr        error
+	closeRequest      protocol.RequestID
+	commandCtx        context.Context
+	commandCancel     context.CancelFunc
+	commands          [policy.OrdinarySlots]command
+	commandHead       int
+	commandQueued     int
+	inputBytes        int
+	commandWake       chan struct{}
+	ledger            *DeliveryLedger
+	sealed            chan struct{}
+	naturalDone       chan struct{}
+	monitorDone       chan struct{}
+	sequence          uint64
+	drainReason       protocol.DrainReason
+	exitAt            time.Time
+	exitedPublished   bool
+	readWaitCancel    context.CancelFunc
 }
 
 // Manager serializes admission, cancellation and Created publication. Resource
@@ -70,7 +80,13 @@ type reservation struct {
 type Manager struct {
 	mu              sync.Mutex
 	commandIO       commandIO
+	outputIO        outputIO
+	outputBudget    *outputBudget
+	creditCtx       context.Context
+	creditCancel    context.CancelFunc
+	monitorWorkers  sync.WaitGroup
 	commandCount    int
+	now             func() time.Time
 	policy          policy.Policy
 	spawner         Spawner
 	sink            Sink
@@ -87,7 +103,8 @@ type Manager struct {
 }
 
 func NewManager(p policy.Policy, s Spawner, sink Sink) *Manager {
-	m := &Manager{commandIO: nativeCommandIO{}, policy: p, spawner: s, sink: sink, records: make(map[protocol.SessionID]*reservation), usable: true, done: make(chan struct{})}
+	m := &Manager{now: time.Now, outputIO: nativeOutputIO{}, outputBudget: newOutputBudget(), commandIO: nativeCommandIO{}, policy: p, spawner: s, sink: sink, records: make(map[protocol.SessionID]*reservation), usable: true, done: make(chan struct{})}
+	m.creditCtx, m.creditCancel = context.WithCancel(context.Background())
 	_, m.initErr = rand.Read(m.epoch[:])
 	// Random initial counter is opaque; it contains no process or address data.
 	var seed [8]byte
@@ -110,7 +127,7 @@ func (m *Manager) Admit(f protocol.Frame) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopping {
+	if m.stopping && f.Header.Type != protocol.TypeOutputCredit {
 		return reject(protocol.ErrorState)
 	}
 	if m.initErr != nil {
@@ -132,6 +149,21 @@ func (m *Manager) Admit(f protocol.Frame) error {
 		go m.start(r, v.ReceiveWindow)
 	case protocol.InputBytes, protocol.ResizeSession:
 		return m.admitCommandLocked(f, msg)
+	case protocol.OutputCredit:
+		r := m.records[f.Header.Session]
+		if r == nil {
+			return reject(protocol.ErrorUnknownSession)
+		}
+		if !r.published {
+			return reject(protocol.ErrorState)
+		}
+		disposition, event := r.ledger.ApplyCredit(f.Header.Request, v.RawBytes)
+		if disposition == CreditRejected {
+			return reject(protocol.ErrorState)
+		}
+		if event != nil {
+			m.emitLocked(*event)
+		}
 	case protocol.CloseSession:
 		r := m.records[f.Header.Session]
 		if r == nil {
@@ -148,7 +180,7 @@ func (m *Manager) Admit(f protocol.Frame) error {
 		m.shutdownRequest = f.Header.Request
 		m.stopLocked()
 	default:
-		// Task5 adds independent decoder-side credit accounting.
+		// State validation for messages outside manager admission.
 		if f.Header.Session != 0 && m.records[f.Header.Session] == nil {
 			return reject(protocol.ErrorUnknownSession)
 		}
@@ -175,6 +207,7 @@ func (m *Manager) stopLocked() {
 		return
 	}
 	m.stopping = true
+	m.creditCancel()
 	records := make([]*reservation, 0, len(m.records))
 	for _, r := range m.records {
 		r.cancel()
@@ -186,9 +219,15 @@ func (m *Manager) stopLocked() {
 // emitLocked linearizes bounded queue admission with cancel/commit. No socket I/O.
 func (m *Manager) emitLocked(e Event) {
 	if !m.usable {
+		if e.Output != nil {
+			e.Output.FailWrite(errors.New("contact unavailable"))
+		}
 		return
 	}
 	if err := m.sink.Enqueue(e); err != nil {
+		if e.Output != nil {
+			e.Output.FailWrite(err)
+		}
 		m.usable = false
 		m.stopLocked()
 	}
@@ -203,6 +242,7 @@ func (m *Manager) stop(records []*reservation) {
 		go func(r *reservation) { defer wg.Done(); errs <- m.cleanup(ctx, r) }(r)
 	}
 	wg.Wait()
+	m.monitorWorkers.Wait()
 	close(errs)
 	var err error
 	for e := range errs {

@@ -184,7 +184,7 @@ func TestCommandNativeResizeSizeSignalAndFlags(t *testing.T) {
 	t.Cleanup(func() { shutdown(t, m) })
 	create(t, m, 1)
 	id := s.await(t, 1)[0].Session
-	readUntil(t, r, "TTY_OK 31 91")
+	outputUntil(t, s, "TTY_OK 31 91")
 	before := commandFlags(t, r.MasterFD)
 	if before&syscall.O_NONBLOCK == 0 {
 		t.Fatal("master not nonblocking before resize")
@@ -194,7 +194,7 @@ func TestCommandNativeResizeSizeSignalAndFlags(t *testing.T) {
 	if after := commandFlags(t, r.MasterFD); after != before {
 		t.Fatalf("resize changed master flags %#x -> %#x", before, after)
 	}
-	readUntil(t, r, "WINCH 33 97")
+	outputUntil(t, s, "WINCH 33 97")
 	admitCommand(t, m, protocol.InputBytes{Bytes: []byte("exit\n")}, 3, id)
 	assertAck(t, completion(t, s, 3), protocol.TypeInputBytes)
 	m.mu.Lock()
@@ -244,4 +244,25 @@ func TestTwoSessionCommandsNative(t *testing.T) {
 	admitCommand(t, m, protocol.CloseSession{}, 6, aID)
 	completion(t, s, 6)
 	onceCompletions(t, s, 3, 4, 5, 6)
+}
+
+func outputUntil(t *testing.T, s *recordingSink, marker string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		var b []byte
+		for _, e := range s.snapshot() {
+			if o, ok := e.Message.(protocol.OutputBytes); ok {
+				b = append(b, o.Bytes...)
+			}
+		}
+		if bytes.Contains(b, []byte(marker)) {
+			return
+		}
+		select {
+		case <-s.wake:
+		case <-deadline:
+			t.Fatalf("manager output marker %q absent", marker)
+		}
+	}
 }
