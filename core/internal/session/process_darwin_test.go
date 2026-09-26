@@ -550,3 +550,47 @@ func TestCancelledSpawnReturnsOwnedResources(t *testing.T) {
 		t.Fatalf("cancelled spawn FD %d -> %d", baseline, n)
 	}
 }
+
+// R1: one resize in the old check-to-pause gap must complete without a second
+// signal. The after schedule emits its marker from a harmless native handler
+// that can run only after sigsuspend has atomically entered the unblocked wait.
+func TestDarwinResizeWaitInterleavings(t *testing.T) {
+	native := buildNative(t, "testdata/tty-wait-interleaving.c")
+	for _, schedule := range []string{"before", "after"} {
+		t.Run(schedule, func(t *testing.T) {
+			c := config(native)
+			c.Env = append(c.Env, "WAIT_TEST_MODE="+schedule)
+			r, e := (DarwinSpawner{}).Spawn(context.Background(), c)
+			if e != nil {
+				t.Fatal(e)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if e := r.Rollback(ctx); e != nil {
+					t.Error(e)
+				}
+			})
+			marker := "WAIT_ENTERED"
+			if schedule == "before" {
+				marker = "BEFORE_WAIT"
+			}
+			output := readUntil(t, r, marker)
+			if !strings.Contains(output, "TTY_OK 31 91") {
+				t.Fatal("initial tty/size checks did not precede wait barrier")
+			}
+			if e := pty.Setsize(r.Master, &pty.Winsize{Rows: 33, Cols: 97}); e != nil {
+				t.Fatal(e)
+			}
+			if schedule == "before" {
+				writePTY(t, r, "continue\n")
+			}
+			readUntil(t, r, "WINCH 33 97")
+			writePTY(t, r, "exit\n")
+			v := drainResult(t, r)
+			if v.Err != nil || v.Status != (protocol.ExitStatus{Kind: 1, Value: 17}) {
+				t.Fatalf("single-resize child status %+v", v)
+			}
+		})
+	}
+}
