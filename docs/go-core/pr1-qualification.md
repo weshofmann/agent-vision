@@ -44,7 +44,15 @@ is completed; this initial checkpoint makes no runtime-success claim.
   with no new breakage. Initial test red was missing-API compilation;
   supplemental behavioral regressions do not retroactively establish test-first
   sequencing. Final whole-PR exact-SHA stress remains required.
-- Tasks 3–6: pending.
+- Task 3 at `8bb764f0a2b803dcea2a07025540995c9737579d`: exact-commit
+  full race/GC suite, twenty startup-barrier race repeats, native failed-start
+  FD/direct-child baselines and vet passed. Controller uncached module tests
+  passed. Independent Astra/high spec and quality review passed with no findings.
+  Starting owns late-returned resources; cancellation and Created share one
+  admission boundary. Cleanup attempts are serialized and retryable; uncertainty
+  returns a correlated error and preserves ownership. Command/reader/seal/server
+  behavior remains assigned to Tasks 4–6.
+- Tasks 4–6: pending.
 - V0 clean baseline at `233485afa6da31950cf9ca05a9735a0f57b61489`: fresh
   Debug configure/build and all 12 CTests passed (23.54 seconds), including
   synthetic desktop PTY and terminal restoration checks. Qualified host:
