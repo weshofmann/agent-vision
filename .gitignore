@@ -2,3 +2,7 @@
 /.codex/worktrees/
 # Disposable V0 upstream checkouts, tools and builds (not retained product code).
 /.probe/
+
+/build*/
+/.superpowers/
+__pycache__/

@@ -1,0 +1,82 @@
+cmake_minimum_required(VERSION 3.24...3.31)
+project(AgentVision LANGUAGES C CXX)
+if(NOT UNIX)
+    message(FATAL_ERROR "This slice supports Unix PTYs only")
+endif()
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(FetchContent)
+set(TVTERM_BUILD_APP OFF CACHE BOOL "" FORCE)
+set(TVTERM_OPTIMIZE_BUILD OFF CACHE BOOL "" FORCE)
+set(TVTERM_USE_SYSTEM_TVISION OFF CACHE BOOL "" FORCE)
+set(TVTERM_USE_SYSTEM_LIBVTERM OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(tvterm
+    GIT_REPOSITORY https://github.com/magiblot/tvterm.git
+    GIT_TAG 210eb23564da06c358d2623388939bb02f7f3419
+    GIT_SUBMODULES deps/tvision deps/vterm/libvterm
+    GIT_SUBMODULES_RECURSE TRUE
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(tvterm)
+find_package(Git REQUIRED)
+foreach(dep IN ITEMS tvterm tvision libvterm)
+    if(dep STREQUAL "tvterm")
+        set(dep_path "${tvterm_SOURCE_DIR}")
+        set(expected 210eb23564da06c358d2623388939bb02f7f3419)
+    elseif(dep STREQUAL "tvision")
+        set(dep_path "${tvterm_SOURCE_DIR}/deps/tvision")
+        set(expected 640263136daa67b96a90c9bf6eb8816216ff76a3)
+    else()
+        set(dep_path "${tvterm_SOURCE_DIR}/deps/vterm/libvterm")
+        set(expected 62b27d1db0c49eed55936a1bfa35102be91afe42)
+    endif()
+    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${dep_path}" rev-parse HEAD
+        OUTPUT_VARIABLE actual OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    if(NOT actual STREQUAL expected)
+        message(FATAL_ERROR "Unexpected ${dep} revision: ${actual}")
+    endif()
+endforeach()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.py"
+    "${tvterm_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-lifecycle.patch"
+    COMMAND_ERROR_IS_FATAL ANY)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
+foreach(notice IN ITEMS tvterm.COPYRIGHT tvision.COPYRIGHT libvterm.LICENSE)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
+        "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
+endforeach()
+add_executable(agentvision src/main.cpp src/app.cpp src/window.cpp)
+target_link_libraries(agentvision PRIVATE tvterm-core)
+target_compile_options(agentvision PRIVATE -Wall -Wextra)
+include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME source_guard COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_guard.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.py")
+    set_tests_properties(source_guard PROPERTIES TIMEOUT 30)
+    add_executable(scrollback_lock_test tests/scrollback_lock.cpp)
+    target_link_libraries(scrollback_lock_test PRIVATE tvterm-core)
+    target_compile_definitions(scrollback_lock_test PRIVATE
+        AGENTVISION_TERMCTRL_SOURCE="${tvterm_SOURCE_DIR}/source/tvterm-core/termctrl.cc")
+    add_test(NAME scrollback_lock COMMAND scrollback_lock_test)
+    set_tests_properties(scrollback_lock PROPERTIES TIMEOUT 10)
+    add_executable(lifecycle_test tests/lifecycle.cpp)
+    target_link_libraries(lifecycle_test PRIVATE tvterm-core)
+    add_test(NAME lifecycle COMMAND lifecycle_test)
+    add_test(NAME shell_fallback COMMAND lifecycle_test fallback)
+    set_tests_properties(shell_fallback PROPERTIES TIMEOUT 10)
+    add_test(NAME controller_shutdown COMMAND lifecycle_test controller)
+    set_tests_properties(controller_shutdown PROPERTIES TIMEOUT 10)
+    foreach(case IN ITEMS cycles signal resize foreground blocked held-slave)
+        add_test(NAME lifecycle_${case} COMMAND lifecycle_test ${case})
+        set_tests_properties(lifecycle_${case} PROPERTIES TIMEOUT 20)
+    endforeach()
+    set_tests_properties(lifecycle PROPERTIES TIMEOUT 20)
+    if(APPLE)
+        add_test(NAME desktop_pty COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_pty.py" $<TARGET_FILE:agentvision>
+            --output "${CMAKE_CURRENT_BINARY_DIR}/desktop-evidence")
+        set_tests_properties(desktop_pty PROPERTIES TIMEOUT 60
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
+    endif()
+endif()
