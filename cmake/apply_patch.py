@@ -11,6 +11,12 @@ def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args])
 
 def effective_diff(repo):
+    # diff trusts these index bits even if compiler-visible bytes changed.
+    # Refuse flagged checkouts conservatively; never clear a user's flags/index.
+    for entry in git(repo, 'ls-files', '-v', '-z').split(b'\0'):
+        if entry and (entry[:1] == b'S' or entry[:1].islower()):
+            sys.exit('Tracked assume-unchanged/skip-worktree entries prevent validation; '
+                     'use a fully materialized checkout without these flags; source left unchanged')
     # HEAD is the baseline, not the index. Force dependency visibility and avoid
     # configured external/textconv output masking the source that will compile.
     return git(repo, 'diff', '--binary', '--no-color', '--no-ext-diff',

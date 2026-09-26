@@ -22,6 +22,7 @@ source against HEAD before applying a patch, recursively checking pinned gitlink
 - Condition mutation and waiting share the isolated queue mutex; no lost wakeups.
 - Rendering state may enqueue events without acquiring the emulator mutex.
 - Guard includes staged/unstaged effective tracked changes and recursive gitlinks;
+  conservatively refuse assume-unchanged/skip-worktree entries without clearing them;
   rejection preserves fixture contents/index, and no reset/cleanup is permitted.
 - Draft PR, sanitized public evidence and fresh head/tested SHAs throughout.
 

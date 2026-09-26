@@ -46,7 +46,13 @@ close-on-exec so later shells do not retain another terminal's master.
 validates the complete effective tracked diff against HEAD (including staged
 edits), recursively checks dependency gitlinks/cleanliness, rejects before applying
 anything, and never resets a working tree. Configured submodule-ignore settings
-cannot hide tracked dependency edits. Use a
+cannot hide tracked dependency edits. Root and recursive dependencies with
+`assume-unchanged` or `skip-worktree` tracked entries are conservatively refused,
+even if those files are clean: Git may hide their effective bytes from the diff.
+The guard reads NUL-delimited `git ls-files -v` tags without clearing flags or
+rewriting the index; see [Git's documented tags](https://git-scm.com/docs/git-ls-files).
+Eighteen real-Git fixture cases include both flags at root/dependency/nested levels
+and verify rejected files, HEAD, staged entries and flags remain unchanged. Use a
 fresh build directory after changing patch versions. Focused tests use real PTYs,
 wait statuses, kernel thread counts and FD counts, not mocked lifecycle calls.
 

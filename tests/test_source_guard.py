@@ -49,7 +49,7 @@ class SourceGuard(unittest.TestCase):
     def applied(self): (self.root/'allowed.cc').write_text('accepted patch\n')
     def snapshot(self):
         # Compare index meaning, not Git's optional stat-cache metadata.
-        return tuple((git(repo, 'rev-parse', 'HEAD'), git(repo, 'ls-files', '--stage', '-z'),
+        return tuple((git(repo, 'rev-parse', 'HEAD'), git(repo, 'ls-files', '--stage', '-z'), git(repo, 'ls-files', '-v', '-z'),
                       git(repo, 'diff', '--binary', '--no-ext-diff', 'HEAD'),
                       tuple((p.relative_to(repo).as_posix(), p.read_bytes())
                             for p in sorted(repo.rglob('*'))
@@ -96,6 +96,28 @@ class SourceGuard(unittest.TestCase):
         (self.dep/'dependency.cc').write_text('different dependency revision\n')
         git(self.dep, 'add', 'dependency.cc'); git(self.dep, 'commit', '-qm', 'different')
         self.rejected_unchanged()
+    def flagged_rejected(self, repo, name, flag, changed=True):
+        # Before application: a rejection must not add even the accepted patch.
+        git(repo, 'update-index', flag, name)
+        if changed: (repo/name).write_text('hidden effective edit\n')
+        self.rejected_unchanged()
+
+    def test_root_assume_unchanged_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.root, 'source.cc', '--assume-unchanged')
+    def test_root_skip_worktree_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.root, 'source.cc', '--skip-worktree')
+    def test_dependency_assume_unchanged_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.dep, 'dependency.cc', '--assume-unchanged')
+    def test_dependency_skip_worktree_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.dep, 'dependency.cc', '--skip-worktree')
+    def test_nested_assume_unchanged_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.nested, 'nested.cc', '--assume-unchanged')
+    def test_nested_skip_worktree_edit_rejected_unchanged(self):
+        self.flagged_rejected(self.nested, 'nested.cc', '--skip-worktree')
+    def test_clean_assume_unchanged_entry_refused_unchanged(self):
+        self.flagged_rejected(self.root, 'source.cc', '--assume-unchanged', changed=False)
+    def test_clean_skip_worktree_entry_refused_unchanged(self):
+        self.flagged_rejected(self.root, 'source.cc', '--skip-worktree', changed=False)
     def test_nested_dependency_tracked_edit_rejected_before_apply(self):
         (self.nested/'nested.cc').write_text('nested dependency edit\n')
         self.rejected_unchanged()
