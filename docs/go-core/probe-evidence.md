@@ -18,7 +18,7 @@ are retained in the fixture `go.sum.txt`. No product source/build was changed.
 | Does no-argument shell startup produce interactive/job-control semantics? | `go test … -run TestInteractiveShellAndForegroundGroup` | `/bin/sh` detected interactive mode; TIOCGPGRP equals owned direct shell PID (only boolean retained); normal exit 0 with continuous master drainage | Synthetic HOME/ENV/PS1, no private startup files. Waiting without drainage initially exceeded 2 s; independent output reading is required. No full Ctrl-Z/fg job-control matrix. |
 | Can Go own a real controlling-terminal session with input and resize? | `go test … -run TestPTYInputResizeTTY` | stdin/out/err all TTY; input marker; `stty size` 31×91; exit 7; second wait returns ECHILD | `/bin/sh` synthetic script; no user startup files or interactive job-control matrix. Supports creack/pty. |
 | Does Wait mean PTY EOF or close? | `… -run TestWaitDoesNotOwnPTYEOF` | Wait completed with harness-owned slave still open; macOS post-exit read returned 0/EOF | Darwin controlling-terminal teardown can produce EOF even with another slave descriptor. Initial wait-before-draining fixture exceeded 2 s; draining master allowed completion. This is evidence to keep reading independently, not a universal kernel ordering claim. |
-| Can single-owner reaping preserve status under natural exit/close? | `… -run TestSerializedReaper` | Final fixture uses pty.Open/os.StartProcess and exact V0 termios readback; 50 alternating natural/close cycles, exit 17, explicit GC and FD/goroutine baseline checks; ten stress repeats (500 cycles) passed in 6.862 s | Prior exec.Cmd external-reap integration failed independent execwait diagnostics; superseded. No forced PID reuse or kernel latency guarantee. |
+| Can single-owner reaping preserve status under natural exit/close? | `… -run TestSerializedReaper` | Final fixture uses pty.Open/os.StartProcess and exact V0 termios readback; 50 alternating natural/close cycles, exit 17, explicit GC and FD/goroutine baseline checks; ten stress repeats (500 cycles) passed in 6.301 s | Prior exec.Cmd external-reap integration failed independent execwait diagnostics; superseded. No forced PID reuse or kernel latency guarantee. |
 | Are arbitrary bytes and final output retained? | `… -run TestRawBinaryAndOrdering` | 20 iterations delivered all 11 bytes including NUL, 0xff, ESC/DSR request and FINAL, exit 13 | First recorded iteration observed all 11 before completion notification; scheduling varies. Does not prove Wait/EOF ordering or full proposed event sequencer. Contract requires sealing and bounded drain. |
 | Can input back up without blocking cancellation? | `… -run TestBlockedIOCancellationAndHangup` | raw/no-echo input reached EAGAIN; master close + HUP/250 ms/KILL fixture reaped; 251 ms recorded | Canonical mode discarded input instead of backing up in first fixture. Cooperative raw nonblocking loops are tested; no production poll/wakeup implementation or CPU-load claim. |
 | Do attached foreground jobs get normal hangup? | `… -run TestForegroundHangup` | synthetic foreground shell HUP trap wrote private marker after master close | Bounded fixture only; no detached-descendant supervision. |
@@ -26,7 +26,7 @@ are retained in the fixture `go.sum.txt`. No product source/build was changed.
 | Does IPC loss trigger backend/session cleanup? | `python3 ipc_probe.py` | one-byte framed input; real PTY output; resize 33×97; endpoint loss joined reader/reaped child; 1 ms recorded | Reduced protocol, one session, responsive peer. Does not qualify credit handling, blocked socket writes, full handshake/errors or frontend rendering. |
 
 Final full command `GODEBUG=execwait=2 GOGC=1 go test -v -race -count=1 -timeout=30s ./...`:
-eight tests passed in 3.314 s (includes race-runtime overhead). The original
+eight tests passed in 3.413 s (includes race-runtime overhead). The original
 normal run at 3b9f576 passed in 3.372 s but did not expose R1's finalizer failure.
 C++ probe and Python IPC probe exited
 0. Reproduction is required on other hosts; timing numbers are observations,
@@ -43,6 +43,14 @@ Process.Wait or Cmd.Wait runs concurrently/after that owner reaps. Independent
 Astra review reproduced an execwait finalizer panic in the old proposal under
 GODEBUG=execwait=2/GOGC=1: Release leaves Cmd.ProcessState unset. Remediation
 uses a spawn API with no Cmd contract to bypass; full stress command is in README.
+
+The [second review](https://github.com/weshofmann/agent-vision/pull/5#issuecomment-5845357080)
+identified a verification defect: Release changes Process.Pid to -1, so the old
+second-wait assertion used an any-child wait. The final fixture saves a positive
+ownedPID before Release, uses it throughout, checks Release's error, and requires
+ECHILD for that exact PID. The full eight-test run and 500-cycle stress above were
+repeated after this correction. Earlier timings do not qualify this corrected
+assertion.
 
 `creack/pty.StartWithSize` sets Setsid/Setctty and starts the command; its parent
 slave is closed after Start. It does not reap, drain, cancel or supervise jobs.

@@ -254,7 +254,12 @@ Wait4(ownedPID,WNOHANG), direct-PID signals and status transitions. Nobody else,
 including a SIGCHLD handler, waits this PID. EINTR retries; ECHILD/terminal wait
 error stops signalling. Only this owner reaps, so child/zombie retains PID identity
 until it does so; it never signals after reap. Process.Release after captured
-status; **no Cmd or Cmd.Wait on this path**. An earlier exec.Command proposal was
+status and check Release's error; **no Cmd or Cmd.Wait on this path**. Capture
+immutable ownedPID before any Release (which sets Process.Pid=-1); use only
+that positive owned ID for lifecycle calls and direct-child verification, never
+an any-child wait. After reaping, retained numeric ID is diagnostic only and must
+never be signalled again.
+An earlier exec.Command proposal was
 invalid: Wait4+Release leaves Cmd.ProcessState nil and GODEBUG=execwait=2 panics
 under explicit GC (independent R1 reproduction). os.StartProcess supplies no Cmd
 copier/context/finalizer contract to bypass. No concurrent Process.Wait, external
