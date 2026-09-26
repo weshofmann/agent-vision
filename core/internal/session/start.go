@@ -1,0 +1,148 @@
+package session
+
+import (
+	"context"
+	"errors"
+
+	"github.com/weshofmann/agent-vision/core/internal/protocol"
+)
+
+func (m *Manager) start(r *reservation, window uint32) {
+	defer close(r.startDone)
+	resources, err := m.spawner.Spawn(r.ctx, r.config)
+	r.resources = resources // adopt even resources returned with error/cancellation
+	var done <-chan ProcessResult
+	if resources != nil && resources.Process != nil {
+		// Capture once outside the admission lock. Unpublished rollback consumes
+		// only the owner's separate immutable completion, never this channel.
+		done = resources.Process.Done()
+	}
+	m.mu.Lock()
+	if err == nil && resources != nil && resources.Process != nil && r.ctx.Err() == nil && !m.stopping {
+		r.published = true
+		r.state = live
+		m.emitLocked(Event{Session: r.id, Request: r.request, Message: protocol.SessionCreated{Rows: r.config.Rows, Cols: r.config.Cols, AcceptedWindow: window}})
+		m.mu.Unlock()
+		go m.observe(r, done)
+		// Reader/command workers may only begin after this commit (Tasks 4/5).
+		return
+	}
+	m.mu.Unlock()
+	close(r.observed) // unpublished: no public process-result consumer
+	// Startup completion includes rollback. Shutdown must join startDone before
+	// acknowledging; closing descriptors requires joining all future FD workers.
+	ctx, cancel := context.WithTimeout(context.Background(), m.policy.CleanupTimeout)
+	defer cancel()
+	var cleanupErr error
+	if resources != nil {
+		cleanupErr = resources.Rollback(ctx)
+	}
+	if cleanupErr == nil {
+		select {
+		case <-r.observed:
+		case <-ctx.Done():
+			cleanupErr = ctx.Err()
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	code := protocol.ErrorSpawn
+	if r.ctx.Err() != nil || m.stopping {
+		code = protocol.ErrorState
+	}
+	m.emitLocked(Event{Request: r.request, Message: protocol.ErrorMessage{Code: code, Message: "session startup failed"}})
+	if cleanupErr == nil {
+		delete(m.records, r.id)
+	}
+	// Preserve uncertainty and ownership; cleanup retries Rollback on shutdown.
+}
+
+// cleanup is a per-reservation completion barrier shared by Close and shutdown.
+// Tasks 4/5 must cancel/join every captured-FD worker here BEFORE Rollback.
+func (m *Manager) cleanup(ctx context.Context, r *reservation) error {
+	r.cleanupMu.Lock()
+	if r.cleanupComplete {
+		r.cleanupMu.Unlock()
+		return nil
+	}
+	if !r.cleanupRunning {
+		r.cleanupRunning = true
+		r.cleanupDone = make(chan struct{})
+		go func() {
+			err := m.cleanupAttempt(ctx, r)
+			r.cleanupMu.Lock()
+			r.cleanupErr = err
+			r.cleanupComplete = err == nil
+			r.cleanupRunning = false
+			close(r.cleanupDone)
+			r.cleanupMu.Unlock()
+		}()
+	}
+	done := r.cleanupDone
+	r.cleanupMu.Unlock()
+	select {
+	case <-done:
+		r.cleanupMu.Lock()
+		err := r.cleanupErr
+		r.cleanupMu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) cleanupAttempt(ctx context.Context, r *reservation) (err error) {
+	select {
+	case <-r.startDone:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	if err == nil {
+		// Registration ends before startDone. Cancellation has already been sent.
+		// A stuck join keeps this owner reachable; callers still have their watchdog.
+		r.ioWorkers.Wait()
+		if r.resources != nil {
+			err = r.resources.Rollback(ctx)
+		}
+		if err == nil {
+			select {
+			case <-r.observed:
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	err = errors.Join(err, r.result.Err)
+	if err != nil {
+		if r.closeRequest != 0 {
+			m.emitLocked(Event{Session: r.id, Request: r.closeRequest, Message: protocol.ErrorMessage{Code: protocol.ErrorStatusUnavailable, Message: "session cleanup failed"}})
+			r.closeRequest = 0 // one terminal response; a later cleanup Closed is async
+		}
+		return err
+	}
+	if r.published {
+		// No reader exists in Task3; explicit close admits no output. Task5 replaces
+		// this with reader seal/sequence accounting before Exited publication.
+		m.emitLocked(Event{Session: r.id, Message: protocol.SessionExited{Status: r.result.Status, DrainReason: protocol.DrainExplicitClose}})
+		m.emitLocked(Event{Session: r.id, Request: r.closeRequest, Message: protocol.SessionClosed{}})
+	}
+	delete(m.records, r.id)
+	return nil
+}
+
+// observe retains immutable status; Task5 owns the drain/seal publication step.
+func (m *Manager) observe(r *reservation, done <-chan ProcessResult) {
+	v, ok := <-done
+	if !ok {
+		v = ProcessResult{Status: protocol.ExitStatus{Kind: protocol.ExitUnavailable}, Err: errors.New("missing process result")}
+	}
+	m.mu.Lock()
+	r.result = v
+	if r.state == live {
+		r.state = draining
+	}
+	m.mu.Unlock()
+	close(r.observed)
+}
