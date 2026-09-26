@@ -52,7 +52,21 @@ is completed; this initial checkpoint makes no runtime-success claim.
   admission boundary. Cleanup attempts are serialized and retryable; uncertainty
   returns a correlated error and preserves ownership. Command/reader/seal/server
   behavior remains assigned to Tasks 4–6.
-- Tasks 4–6: pending.
+- Task 4 implementation at `24734b5b92a6fed5d92c2f0cfd59f9d7dc01ca2e`:
+  exact-code uncached full race suite passed (protocol 1.513 seconds, session
+  5.126 seconds), twenty targeted race repeats passed (22.533 seconds), vet
+  passed, and controller uncached module tests passed. Native checks cover
+  raw-slave EAGAIN with exact 1,022-byte prefix, worker join before descriptor
+  close/reuse, size/SIGWINCH with unchanged nonblocking flags, and second-session
+  progress during a blocked write. Command cancellation on natural exit leaves
+  lifetime context available for bounded output drain. Review head
+  `08e828a9f07f0472f4b604532f5cb08c40fb6293` adds only a comment clarification;
+  independent Astra/high spec and quality review passed with no findings.
+  Live resize uses captured-FD TIOCSWINSZ with pinned pty.Winsize to preserve
+  descriptor ownership; no current File.Fd reset defect is claimed. Linux stub
+  compilation is not platform qualification. Reader/seal/ledger/server remain
+  Tasks 5–6.
+- Tasks 5–6: pending.
 - V0 clean baseline at `233485afa6da31950cf9ca05a9735a0f57b61489`: fresh
   Debug configure/build and all 12 CTests passed (23.54 seconds), including
   synthetic desktop PTY and terminal restoration checks. Qualified host:
