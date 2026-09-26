@@ -1,0 +1,2 @@
+# Keep task worktrees out of version control without hiding Codex configuration.
+/.codex/worktrees/
