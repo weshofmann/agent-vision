@@ -1,0 +1,25 @@
+// DISPOSABLE synthetic FD/framing child. Not an agentvision-core implementation.
+package main
+import("encoding/binary";"io";"net";"os";"time";"os/exec";"syscall";"fmt";"github.com/creack/pty")
+func main(){
+ f:=os.NewFile(3,"ipc");c,e:=net.FileConn(f);f.Close();if e!=nil{panic(e)};defer c.Close()
+ if len(os.Args)>1 && os.Args[1]=="pty" {forward(c);return}
+ c.SetDeadline(time.Now().Add(3*time.Second))
+ h:=make([]byte,4);if _,e=io.ReadFull(c,h);e!=nil{panic(e)};n:=binary.BigEndian.Uint32(h);if n>65536{os.Exit(3)}
+ b:=make([]byte,n);if _,e=io.ReadFull(c,b);e!=nil{panic(e)}
+ packet:=append(h,b...);for _,v:=range packet{if _,e=c.Write([]byte{v});e!=nil{panic(e)}}
+ if _,e=c.Read(h[:1]);e!=io.EOF {os.Exit(4)}
+}
+func forward(c net.Conn){
+ cmd:=exec.Command("/bin/sh","-c","stty -echo; printf 'READY\\n'; while read x; do if [ \"$x\" = size ]; then stty size; else printf 'REPLY_%s\\n' \"$x\"; fi; done")
+ cmd.Env=[]string{"PATH=/usr/bin:/bin","TERM=xterm-256color","HOME=/nonexistent"}
+ f,e:=pty.StartWithSize(cmd,&pty.Winsize{Rows:24,Cols:80});if e!=nil{panic(e)}
+ fd:=int(f.Fd());if e=syscall.SetNonblock(fd,true);e!=nil{panic(e)}
+ done:=make(chan error,1);go func(){done<-cmd.Wait()}()
+ stop:=make(chan struct{});readerDone:=make(chan struct{})
+ go func(){defer close(readerDone);b:=make([]byte,1024);for{select{case <-stop:return;default:};n,e:=syscall.Read(fd,b);if n>0{h:=make([]byte,4);binary.BigEndian.PutUint32(h,uint32(n));c.SetWriteDeadline(time.Now().Add(time.Second));if _,e=c.Write(append(h,b[:n]...));e!=nil{return}};if e!=nil&&e!=syscall.EAGAIN&&e!=syscall.EINTR{return};time.Sleep(time.Millisecond)}}()
+ for{h:=make([]byte,4);if _,e=io.ReadFull(c,h);e!=nil{break};n:=binary.BigEndian.Uint32(h);if n==0||n>65536{break};b:=make([]byte,n);if _,e=io.ReadFull(c,b);e!=nil{break};if b[0]==1 {if _,e=syscall.Write(fd,b[1:]);e!=nil{break}} else if b[0]==2&&len(b)==5{if e=pty.Setsize(f,&pty.Winsize{Rows:binary.BigEndian.Uint16(b[1:3]),Cols:binary.BigEndian.Uint16(b[3:5])});e!=nil{break}}else{break}}
+ begun:=time.Now();close(stop);c.Close();<-readerDone;f.Close();cmd.Process.Signal(syscall.SIGHUP)
+ select{case <-done:case <-time.After(250*time.Millisecond):cmd.Process.Kill();select{case <-done:case <-time.After(time.Second):os.Exit(5)}}
+ fmt.Printf("IPC_loss cleanup_ms=%d direct_reaped=true reader_joined=true\n",time.Since(begun).Milliseconds())
+}

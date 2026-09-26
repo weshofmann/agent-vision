@@ -1,0 +1,130 @@
+// DISPOSABLE SYNTHETIC ARCHITECTURE PROBE. Not product code.
+package main
+
+import (
+ "bytes"
+ "fmt"
+ "os"
+ "os/exec"
+ "syscall"
+ "testing"
+ "time"
+ "unsafe"
+ "github.com/creack/pty"
+)
+
+func start(t *testing.T, script string) (*exec.Cmd, *os.File, int, <-chan error) {
+ t.Helper()
+ c := exec.Command("/bin/sh", "-c", script)
+ c.Env = []string{"PATH=/usr/bin:/bin", "TERM=xterm-256color", "HOME=/nonexistent"}
+ f,e := pty.StartWithSize(c, &pty.Winsize{Rows:24, Cols:80}); if e!=nil {t.Fatal(e)}
+ fd:=int(f.Fd()); if e=syscall.SetNonblock(fd,true);e!=nil {t.Fatal(e)}
+ done:=make(chan error,1); go func(){done<-c.Wait()}()
+ t.Cleanup(func(){f.Close(); c.Process.Kill()})
+ return c,f,fd,done
+}
+func TestInteractiveShellAndForegroundGroup(t *testing.T){
+ c:=exec.Command("/bin/sh");c.Env=[]string{"PATH=/usr/bin:/bin","HOME=/nonexistent","ENV=/dev/null","PS1=PROBE_READY ","TERM=xterm-256color"}
+ f,e:=pty.StartWithSize(c,&pty.Winsize{Rows:24,Cols:80});if e!=nil{t.Fatal(e)}
+ fd:=int(f.Fd());syscall.SetNonblock(fd,true)
+ done:=make(chan error,1);go func(){done<-c.Wait()}()
+ readUntil(t,fd,[]byte("PROBE_READY"))
+ var fg int32;_,_,errno:=syscall.Syscall(syscall.SYS_IOCTL,uintptr(fd),syscall.TIOCGPGRP,uintptr(unsafe.Pointer(&fg)))
+ if errno!=0||int(fg)!=c.Process.Pid{t.Fatal("foreground pgrp")}
+ syscall.Write(fd,[]byte("stty -echo; case $- in *i*) printf 'MODE_%s\\n' INTERACTIVE;; *) printf NONINTERACTIVE;; esac\n"))
+ readUntil(t,fd,[]byte("MODE_INTERACTIVE"))
+ syscall.Write(fd,[]byte("exit 0\n"))
+ // Keep draining while the kernel/shell finishes, rather than Wait-before-read.
+ end:=time.Now().Add(2*time.Second);finished:=false;b:=make([]byte,4096)
+ for time.Now().Before(end)&&!finished{select{case <-done:finished=true;default:syscall.Read(fd,b);time.Sleep(time.Millisecond)}}
+ if !finished{f.Close();c.Process.Kill();t.Fatal("interactive drain/wait bound")}
+ s:=c.ProcessState.Sys().(syscall.WaitStatus);f.Close();if !s.Exited()||s.ExitStatus()!=0{t.Fatal("interactive exit")}
+ t.Log("no-argument sh detects interactive tty=true foreground-group equals direct shell=true")
+}
+func readUntil(t *testing.T, fd int, marker []byte) []byte {
+ t.Helper(); var out []byte; b:=make([]byte,4096); end:=time.Now().Add(2*time.Second)
+ for time.Now().Before(end) {n,e:=syscall.Read(fd,b); if n>0 {out=append(out,b[:n]...)}; if bytes.Contains(out,marker){return out}; if e!=nil && e!=syscall.EAGAIN && e!=syscall.EINTR {t.Fatalf("read: %v",e)}; time.Sleep(time.Millisecond)}
+ t.Fatalf("marker missing, bytes=%d",len(out));return nil
+}
+func wait(t *testing.T, c *exec.Cmd, done <-chan error) syscall.WaitStatus {
+ t.Helper();select {case <-done:case <-time.After(2*time.Second):t.Fatal("wait bound")};return c.ProcessState.Sys().(syscall.WaitStatus)
+}
+func TestPTYInputResizeTTY(t *testing.T){
+ c,f,fd,done:=start(t,"test -t 0 && test -t 1 && test -t 2 && printf 'TTY_OK\\n'; stty -echo; printf 'READY\\n'; read x; stty size; printf 'INPUT_%s\\n' \"$x\"; exit 7")
+ out:=readUntil(t,fd,[]byte("READY"));if !bytes.Contains(out,[]byte("TTY_OK")){t.Fatal("no tty")}
+ if e:=pty.Setsize(f,&pty.Winsize{Rows:31,Cols:91}); e!=nil {t.Fatal(e)}
+ if _,e:=syscall.Write(fd,[]byte("synthetic\n"));e!=nil{t.Fatal(e)}
+ out=readUntil(t,fd,[]byte("INPUT_synthetic"));if !bytes.Contains(out,[]byte("31 91")){t.Fatal("resize")}
+ s:=wait(t,c,done);if !s.Exited()||s.ExitStatus()!=7 {t.Fatal("status")}
+ var x syscall.WaitStatus;_,e:=syscall.Wait4(c.Process.Pid,&x,syscall.WNOHANG,nil);if e!=syscall.ECHILD {t.Fatal("not reaped")}
+ t.Log("tty/input/resize/exit7/reaped=true")
+}
+func TestWaitDoesNotOwnPTYEOF(t *testing.T){
+ // Hold the slave deliberately in this harness. Avoid shell job-exit policy.
+ f,slave,e:=pty.Open();if e!=nil{t.Fatal(e)};defer slave.Close();defer f.Close()
+ c:=exec.Command("/bin/sh","-c","printf 'HELD\\n'; exit 9");c.Stdin=slave;c.Stdout=slave;c.Stderr=slave;c.SysProcAttr=&syscall.SysProcAttr{Setsid:true,Setctty:true}
+ if e=c.Start();e!=nil{t.Fatal(e)}
+ fd:=int(f.Fd());if e=syscall.SetNonblock(fd,true);e!=nil{t.Fatal(e)}
+ done:=make(chan error,1);go func(){done<-c.Wait()}()
+ out:=readUntil(t,fd,[]byte("HELD")); _=out
+ s:=wait(t,c,done);if s.ExitStatus()!=9 {t.Fatal("status")}
+ b:=make([]byte,1);n,e:=syscall.Read(fd,b);if n>0 || (e!=nil&&e!=syscall.EAGAIN&&e!=syscall.EIO) {t.Fatalf("unexpected post-exit read: n=%d error=%v",n,e)}
+ f.Close();t.Logf("Wait completed with parent-held slave=true; post-exit-read n=%d error=%v (EOF and Wait remain separate observations)",n,e)
+}
+func TestSerializedReaper(t *testing.T){
+ // Prototype the macOS safe ownership alternative: only this goroutine reaps/signals.
+ for i:=0;i<50;i++{
+ c:=exec.Command("/bin/sh","-c","stty -echo; printf READY; read x; exit 17")
+ c.Env=[]string{"PATH=/usr/bin:/bin","HOME=/nonexistent"}
+ f,e:=pty.StartWithSize(c,&pty.Winsize{Rows:24,Cols:80});if e!=nil{t.Fatal(e)}
+ fd:=int(f.Fd());syscall.SetNonblock(fd,true);readUntil(t,fd,[]byte("READY"))
+ if i%2==0 {syscall.Write(fd,[]byte("done\n"))} else {f.Close()}
+ var status syscall.WaitStatus;reaped:=false;signalled:=false;begun:=time.Now()
+ for time.Since(begun)<time.Second {
+ n,e:=syscall.Wait4(c.Process.Pid,&status,syscall.WNOHANG,nil)
+ if n==c.Process.Pid {reaped=true;break};if e!=nil&&e!=syscall.EINTR{t.Fatal(e)}
+ if !signalled && time.Since(begun)>250*time.Millisecond {if e=syscall.Kill(c.Process.Pid,syscall.SIGKILL);e!=nil&&e!=syscall.ESRCH{t.Fatal(e)};signalled=true}
+ time.Sleep(time.Millisecond)
+ }
+ if !reaped{t.Fatal("serialized reaper bound")};f.Close();c.Process.Release()
+ if i%2==0 && (!status.Exited()||status.ExitStatus()!=17){t.Fatal("natural status")}
+ }
+ t.Log("50 natural/close cycles; one Wait4/signalling owner; exact natural exit17; Process.Release after reaping")
+}
+func TestRawBinaryAndOrdering(t *testing.T){
+ for i:=0;i<20;i++{
+ c,f,fd,done:=start(t,"stty -opost; printf '\\000\\377\\033[5nFINAL'; exit 13")
+ var out []byte;b:=make([]byte,3);completed:=false;observedBefore:=0;post:=0;deadline:=time.Now().Add(2*time.Second)
+ for time.Now().Before(deadline){
+ select {case <-done: if !completed {completed=true;observedBefore=len(out);deadline=time.Now().Add(100*time.Millisecond)};default:}
+ n,e:=syscall.Read(fd,b);if n>0 {out=append(out,b[:n]...);if completed{post+=n}}
+ if completed && (e==syscall.EAGAIN||e==syscall.EIO||n==0) {break}; time.Sleep(time.Millisecond)
+ }
+ if !completed {wait(t,c,done)}
+ if !bytes.Equal(out,[]byte{0,255,27,'[','5','n','F','I','N','A','L'}){t.Fatalf("binary mismatch length=%d",len(out))}
+ if c.ProcessState.ExitCode()!=13{t.Fatal("status")};f.Close()
+ if i==0 {t.Logf("observed-before-wait=%d after-wait=%d exact-total=%d; serialize output before exit",observedBefore,post,len(out))}
+ }
+}
+func TestBlockedIOCancellationAndHangup(t *testing.T){
+ c,f,fd,done:=start(t,"trap '' HUP; stty raw -echo; printf 'READY\\n'; while :; do sleep 1; done")
+ readUntil(t,fd,[]byte("READY"));b:=make([]byte,8192);blocked:=false
+ for i:=0;i<1024;i++{_,e:=syscall.Write(fd,b);if e==syscall.EAGAIN{blocked=true;break};if e!=nil{t.Fatal(e)}}
+ if !blocked{t.Fatal("input did not back up")}
+ begun:=time.Now();f.Close();c.Process.Signal(syscall.SIGHUP)
+ select {case <-done:case <-time.After(250*time.Millisecond):c.Process.Kill();select{case <-done:case <-time.After(time.Second):t.Fatal("cleanup bound")}}
+ if !c.ProcessState.Exited()&&!c.ProcessState.Sys().(syscall.WaitStatus).Signaled(){t.Fatal("no final status")}
+ t.Logf("input backpressure detected=true cleanup_ms=%d direct child reaped=true",time.Since(begun).Milliseconds())
+}
+func TestForegroundHangup(t *testing.T){
+ // Foreground shell job uses same tty; trap reports synthetic marker to private file.
+ dir:=t.TempDir(); marker:=dir+"/hangup"
+ c,f,fd,done:=start(t,fmt.Sprintf("/bin/sh -c 'trap \"echo yes > %s; exit\" HUP; printf FG_READY; while :; do sleep 1; done'",marker))
+ readUntil(t,fd,[]byte("FG_READY"));f.Close();wait(t,c,done)
+ end:=time.Now().Add(2*time.Second);for time.Now().Before(end){if b,e:=os.ReadFile(marker);e==nil&&bytes.Contains(b,[]byte("yes")){t.Log("foreground hangup observed=true");return};time.Sleep(10*time.Millisecond)}
+ t.Fatal("foreground hangup marker missing")
+}
+func TestSignalStatus(t *testing.T){
+ c,_,_,done:=start(t,"kill -TERM $$")
+ s:=wait(t,c,done);if !s.Signaled()||s.Signal()!=syscall.SIGTERM{t.Fatal("not exact signal")};t.Log("exact SIGTERM=true")
+}

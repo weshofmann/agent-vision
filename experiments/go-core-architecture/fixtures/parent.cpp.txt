@@ -1,0 +1,36 @@
+// DISPOSABLE C++ socketpair/posix_spawn/partial framing probe.
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <spawn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include <chrono>
+extern char **environ;
+int main(int argc,char **argv){
+ if(argc!=2)return 2;
+ int s[2];if(socketpair(AF_UNIX,SOCK_STREAM,0,s))return 3;
+ for(int fd:s)if(fcntl(fd,F_SETFD,FD_CLOEXEC))return 4;
+ // Move child endpoint away from target 3 so dup2 explicitly clears CLOEXEC.
+ int child=fcntl(s[1],F_DUPFD_CLOEXEC,10);close(s[1]);if(child<0)return 5;
+ posix_spawn_file_actions_t a;posix_spawn_file_actions_init(&a);
+ posix_spawn_file_actions_addclose(&a,s[0]);
+ posix_spawn_file_actions_adddup2(&a,child,3);
+ posix_spawn_file_actions_addclose(&a,child);
+ char *args[]={argv[1],nullptr};pid_t pid;
+ int e=posix_spawn(&pid,argv[1],&a,nullptr,args,environ);
+ posix_spawn_file_actions_destroy(&a);close(child);if(e)return 6;
+ int nosig=1;setsockopt(s[0],SOL_SOCKET,SO_NOSIGPIPE,&nosig,sizeof(nosig));
+ timeval limit{3,0};setsockopt(s[0],SOL_SOCKET,SO_RCVTIMEO,&limit,sizeof(limit));
+ std::vector<unsigned char> packet={0,0,0,7,0,255,27,'[','5','n',0};
+ for(unsigned char v:packet)if(write(s[0],&v,1)!=1)return 7;
+ std::vector<unsigned char> got(packet.size());size_t off=0;
+ while(off<got.size()){ssize_t n=read(s[0],got.data()+off,1);if(n<0&&errno==EINTR)continue;if(n<=0)return 8;off+=n;}
+ if(got!=packet)return 9;
+ auto start=std::chrono::steady_clock::now();close(s[0]);
+ int status; if(waitpid(pid,&status,0)!=pid||!WIFEXITED(status)||WEXITSTATUS(status))return 10;
+ printf("socketpair inherited FD3=true binary/one-byte fragmentation=true EOF child exit=true cleanup_ms=%lld\n",(long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count());
+}

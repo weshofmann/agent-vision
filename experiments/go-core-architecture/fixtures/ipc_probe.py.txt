@@ -1,0 +1,40 @@
+"""Disposable synthetic harness: socketpair + real PTY + IPC disappearance."""
+import socket, subprocess, struct, time
+
+def run(stall=False):
+    a,b=socket.socketpair();a.settimeout(3)
+    # Child API requires FD3. subprocess preexec is disposable single-thread harness only.
+    import os
+    def setup():
+        os.dup2(b.fileno(),3)
+        os.set_inheritable(3,True)
+    p=subprocess.Popen(['./child','pty'],pass_fds=(b.fileno(),3),preexec_fn=setup,
+                       stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    b.close()
+    def send(data):
+        packet=struct.pack('!I',len(data))+data
+        for byte in packet:a.sendall(bytes([byte]))
+    def receive_until(marker):
+        out=b''
+        def exact(n):
+            buf=b''
+            while len(buf)<n:
+                chunk=a.recv(n-len(buf));assert chunk
+                buf+=chunk
+            return buf
+        while marker not in out:
+            n=struct.unpack('!I',exact(4))[0];assert n<=65536
+            out+=exact(n)
+        return out
+    receive_until(b'READY')
+    send(b'\x02'+struct.pack('!HH',33,97))
+    send(b'\x01size\n')
+    assert b'33 97' in receive_until(b'33 97')
+    send(b'\x01synthetic\n')
+    assert b'REPLY_synthetic' in receive_until(b'REPLY_synthetic')
+    begin=time.monotonic();a.close()
+    out,err=p.communicate(timeout=2)
+    assert p.returncode==0,(p.returncode,err)
+    assert b'direct_reaped=true reader_joined=true' in out
+    print('PTY-over-IPC input/resize/output=true endpoint-loss bounded=true',out.decode().strip())
+run()
