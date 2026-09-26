@@ -11,6 +11,8 @@ export PROBE_PYTHON=/Users/devel/.cache/codex-runtimes/codex-primary-runtime/dep
 sh experiments/v0/build_probe.sh
 PYTHONPATH="$PWD/.probe/tools" "$PROBE_PYTHON" experiments/v0/interactive_probe.py \
   .probe/build/tvterm .probe/reproduced-interaction
+"$PROBE_PYTHON" experiments/v0/verify_probe.py .probe/reproduced-interaction
+"$PROBE_PYTHON" -m unittest discover -s experiments/v0 -p 'test_probe_checks.py' -v
 ```
 
 Dependencies/tools/builds go to ignored `.probe/`; nothing installs into the
@@ -21,7 +23,13 @@ or pkg-config. Screen decoder pins: pyte 0.8.2, wcwidth 0.9.1.
 
 The driver runs ~45 seconds, using a 120×40 outer PTY. It sends real menu and
 shell input, captures decoded text snapshots plus raw ANSI output, and measures
-restored attributes in an outer supervisor. Fixed short pacing makes this a
+restored attributes in an outer supervisor. The verifier reports B absent at
+a sampled instant, not proof of which process reaped it; any remaining B state
+fails cleanup qualification while core feasibility is reported separately.
+`probe_cleanup.py` only finalizes this driver's known supervisor/group and PTY
+descriptors, with a bounded reap and original-error preservation; it is not a
+descendant lifecycle manager. Focused tests inject evidence-write, vanished-group
+and reap-timeout failures using mocked signals/waits and real pipe descriptors. Fixed short pacing makes this a
 bounded host probe, not a portable timing-independent regression suite.
 
 Manual check (not claimed as performed):

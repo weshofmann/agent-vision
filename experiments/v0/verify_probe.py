@@ -35,12 +35,14 @@ assert result["outer_input_recovered"]
 assert result["outer_termios_restored_after_input"]
 processes = next(x["owned_shell_processes_after_b_close"] for x in steps
                  if "owned_shell_processes_after_b_close" in x)
-zombies = [line for line in processes if line.split()[0] == b_pid and "Z" in line.split()[2]]
+remaining_b = [line for line in processes if line.split()[0] == b_pid]
+b_states = [line.split()[2] for line in remaining_b]
 summary = {"core_feasibility_checks": "passed", "shell_a_pid": a_pid, "shell_b_pid": b_pid,
-           "closed_b_reaped": not zombies, "owned_shell_metadata": processes,
+           "closed_b_absent_at_sample": not remaining_b,
+           "closed_b_states_at_sample": b_states, "owned_shell_metadata": processes,
            "immediate_termios_equal": result["outer_termios_restored"],
            "termios_equal_after_input": result["outer_termios_restored_after_input"],
-           "v0_qualification": "failed: closed shell B remains zombie" if zombies else "not fully tested"}
+           "v0_qualification": "failed: closed shell B still present at sample" if remaining_b else "not fully tested"}
 print(json.dumps(summary, indent=2))
 # A successful evidence collection is not a qualified V0 application.
-sys.exit(1 if zombies else 0)
+sys.exit(1 if remaining_b else 0)

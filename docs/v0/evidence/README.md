@@ -2,8 +2,9 @@
 
 Behavior tested at **`64f02bede3343e70ad09edd9512ce7048efb58f4`** on
 2026-09-26. Upstream code is unchanged at the three revisions in
-[provenance.json](provenance.json). Later main-merge/documentation commits do not
-change the probe code. This repository had no pre-existing product test suite.
+[provenance.json](provenance.json). The main merge and original archive checkpoint did not change probe code.
+Later review fixes change evidence classification and driver failure cleanup;
+this original archive remains byte-identical and bound to its original SHA. This repository had no pre-existing product test suite.
 
 ## Commands actually run
 
@@ -39,10 +40,12 @@ An earlier uncommitted-driver run observed B still a zombie after B's window
 closed: `82439 82425 Z`, with A live as `82426 82425 Ss+`. The raw ordered steps
 and filtered process-state observation are in
 [exploratory-zombie-steps.json](exploratory-zombie-steps.json), distinct from final
-SHA-bound evidence. The final run reaped B; this variation leaves lifecycle
-qualification unresolved. Root cause is **not established**. The same final
-driver samples this condition; if it sees a zombie, `verify_probe.py` returns 1
-and prints the qualification failure. One passing run cannot dismiss it.
+SHA-bound evidence. The final run found B absent at the sample; this variation leaves lifecycle
+qualification unresolved. Root cause is **not established**. The driver samples this condition; the reviewed `verify_probe.py` returns 1
+for **any** remaining B process (live, stopped or zombie). Absence at a sample
+does not prove which process reaped B. The original archived `results.json`
+contains a legacy `closed_b_reaped` field; that claim was too broad, and the
+reviewed verifier replaces it with `closed_b_absent_at_sample` plus states. One passing run cannot dismiss it.
 
 Reproduce using the documented build/driver/verifier commands. Compare the
 `owned_shell_processes_after_b_close` event with B's PID from `03-shell-b.txt`.

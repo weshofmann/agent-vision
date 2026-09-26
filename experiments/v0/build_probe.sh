@@ -16,5 +16,6 @@ fi
 git -C .probe/upstream/tvterm checkout --detach 210eb23564da06c358d2623388939bb02f7f3419
 git -C .probe/upstream/tvterm submodule update --init --recursive
 git -C .probe/upstream/tvterm submodule status --recursive
-.probe/tools/cmake/data/bin/cmake -S .probe/upstream/tvterm -B .probe/build -DCMAKE_BUILD_TYPE=Debug
+.probe/tools/cmake/data/bin/cmake -S .probe/upstream/tvterm -B .probe/build -DCMAKE_BUILD_TYPE=Debug \
+    -DTVTERM_USE_SYSTEM_TVISION=OFF -DTVTERM_USE_SYSTEM_LIBVTERM=OFF
 .probe/tools/cmake/data/bin/cmake --build .probe/build --parallel 4

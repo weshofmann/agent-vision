@@ -11,13 +11,13 @@ from pathlib import Path
 import pty
 import re
 import select
-import signal
 import subprocess
 import struct
 import termios
 import time
 
 import pyte
+from probe_cleanup import finalize_probe
 
 parser = argparse.ArgumentParser()
 parser.add_argument("binary", type=Path)
@@ -188,15 +188,5 @@ try:
                   "alternate_screen_enter": b"\x1b[?1049h" in raw,
                   "alternate_screen_leave": b"\x1b[?1049l" in raw})
 finally:
-    (args.evidence / "outer-output.ansi").write_bytes(raw)
-    (args.evidence / "steps.json").write_text(json.dumps(steps, indent=2) + "\n")
-    if status is None:
-        # Close the outer PTY BEFORE waiting: ncurses may drain output on exit.
-        os.killpg(pid, signal.SIGKILL)
-        os.close(master)
-        os.close(slave)
-        os.waitpid(pid, 0)
-    else:
-        os.close(master)
-        os.close(slave)
+    finalize_probe(args.evidence, pid, (master, slave), status, raw, steps)
 print(json.dumps(steps[-1], indent=2))
