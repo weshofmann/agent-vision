@@ -1,7 +1,11 @@
 # Go core and C++ presentation architecture
 
-Status: **proposed; operator approval required**. Design and disposable evidence
-only. No retained backend/migration/dynamic-session implementation is authorized.
+Status: **architecture approved for planning only** by the
+[operator review](https://github.com/weshofmann/agent-vision/pull/5#issuecomment-5845488710).
+Design and disposable evidence only. No retained backend/migration/dynamic-session
+implementation is authorized. D1–D8 in that review govern the implementation plan;
+Darwin ownership stays platform-confined, and drain/watchdog timings are named,
+tunable implementation policy, not permanent wire compatibility guarantees.
 Baseline: accepted main `32a2ad84e4ee6496731c434f1175632c6e9d173b` (PR #4).
 Architecture Draft PR: [#5](https://github.com/weshofmann/agent-vision/pull/5).
 

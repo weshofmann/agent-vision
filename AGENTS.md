@@ -15,10 +15,16 @@ Start by proving the terminal desktop is useful; do not build the entire harness
 - Verify upstream capabilities, licenses, dependency revisions, and actual build
   compatibility. Treat conversational architecture suggestions as hypotheses,
   not verified dependency facts or an approved implementation specification.
-- Keep the first scope small. A daemon, persistence across frontend restarts,
-  orchestration, MCP, remote access, and provider integrations are later decisions.
-- A C++ UI with a later Go backend is a candidate, not a requirement to introduce
-  two languages or IPC before the first working desktop.
+- The accepted V0 uses C++/Turbo Vision for presentation. The approved next
+  architecture makes Go authoritative for sessions, PTYs, shell/process lifecycle
+  and IPC, while C++ retains terminal emulation, rendering and desktop interaction.
+- The first Go core is frontend-spawned and connection-scoped: frontend shutdown
+  or IPC loss tears down its sessions and core. Multiple future presentation
+  clients are a design goal; this split does not authorize their implementation.
+- Keep scope small. Daemon operation, persistence across frontend restarts,
+  reconnect, remote access, orchestration, MCP and provider integrations remain
+  deferred and must not be inferred from the split. Retained migration requires
+  operator approval of the implementation plan.
 
 ## Required workspace and worktree placement
 
