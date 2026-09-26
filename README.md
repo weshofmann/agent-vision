@@ -85,6 +85,7 @@ The core is qualified only on Darwin arm64 with exactly Go 1.27.0.
   -DCMAKE_BUILD_TYPE=Debug
 .probe/tools/cmake/data/bin/cmake --build build-core --parallel 4
 .probe/tools/cmake/data/bin/ctest --test-dir build-core --output-on-failure
+python3 tests/core_client_test.py
 python3 tests/core_client.py build-core/agentvision-core
 ```
 
