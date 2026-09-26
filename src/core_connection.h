@@ -86,8 +86,10 @@ class SessionEndpoint {
 class CoreConnection {
   public:
     // Callback runs once outside locks after IPC users stop, before escalation.
-    // It must not block or destroy/join this connection; signal the UI restoration
-    // owner when terminal APIs require the UI thread. Endpoint handles own payloads
+    // Complete bounded presentation stop/restoration before returning (100ms
+    // userspace target); never destroy/join this connection or wait on core I/O.
+    // UI-thread restoration needs a bounded acknowledgement, not just a signal.
+    // Endpoint handles own payloads
     // and metadata, but only a live connection can submit credit. The transport
     // owns both strong handles, avoiding a connection/endpoint reference cycle.
     static StartResult start(const std::string &absolutePath,

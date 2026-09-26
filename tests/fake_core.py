@@ -50,7 +50,9 @@ while True:
     assert r>last_request
     last_request=r
     if t==3:
-        session+=1; assert body==b'\x00\x18\x00\x50\x00\x04\x00\x00'
+        session+=1
+        if mode=='stale': session=1  # deliberate fully-retired ID reuse to challenge old handles
+        assert body==b'\x00\x18\x00\x50\x00\x04\x00\x00'
         out=frame(4,r,session,body)
         data=b'A\x00\xff' if session==1 else b'Bxy'
         if mode not in ('blocked-writer','partial-write'):
@@ -61,7 +63,7 @@ while True:
             out=b''.join([frame(4,r,session,body)]+[frame(9,sid=session,body=struct.pack('>Q',i)+b'x') for i in range(1,130)])
         if mode=='malformed-status':
             out+=frame(10,sid=session,body=struct.pack('>BIBQB',1,0,0,2,1))
-        if session==1 and mode=='streams': out+=frame(10,sid=1,body=struct.pack('>BIBQB',1,7,0,1,1))
+        if (session==1 and mode=='streams') or mode in ('flush-close','stale'): out+=frame(10,sid=1,body=struct.pack('>BIBQB',1,7,0,1,1))
         s.sendall(out)
         if mode=='blocked-writer' and session==16:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)

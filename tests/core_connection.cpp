@@ -68,6 +68,86 @@ static std::shared_ptr<CoreConnection> start(const char *mode) {
 }
 int main(int argc, char **argv) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "flush-close") {
+            auto c = start("flush-close");
+            for (int i = 0; i < 32; ++i) {
+                c->createSession(24, 80);
+                auto a = c->endpoint(event(c, ConnectionEvent::Kind::Created).session);
+                auto data = a->readChunk();
+                a->consumed(data.bytes.size());
+                auto end = a->readChunk();
+                check(end.kind == TransportChunk::Kind::End, "concurrent fixture sealed output");
+                std::promise<void> go;
+                auto ready = go.get_future().share();
+                auto flusher = std::async(std::launch::async, [&] {
+                    ready.wait();
+                    a->flushed(end.sequence);
+                });
+                auto closer = std::async(std::launch::async, [&] {
+                    ready.wait();
+                    return c->closeSession(a->metadata().id);
+                });
+                go.set_value();
+                flusher.get();
+                check(closer.get() != 0, "concurrent Close admitted");
+                bool closed = false;
+                auto deadline = Clock::now() + std::chrono::seconds(2);
+                ConnectionEvent e;
+                while (!closed && Clock::now() < deadline) {
+                    if (!c->pollEvent(e)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                    check(e.kind != ConnectionEvent::Kind::Lost,
+                          "concurrent flush/Close keeps contact");
+                    if (e.kind == ConnectionEvent::Kind::Exited)
+                        check(e.metadata.state == SessionState::Exited &&
+                                  e.metadata.status.value == 7,
+                              "Exited event carries its committed snapshot");
+                    if (e.kind == ConnectionEvent::Kind::Closed)
+                        closed = true;
+                }
+                check(closed && a->metadata().state == SessionState::Closed,
+                      "concurrent Closed eventually visible");
+                while (c->pollEvent(e))
+                    check(e.kind != ConnectionEvent::Kind::Exited,
+                          "Exited notification cannot follow Closed");
+            }
+            c->shutdown();
+            check(c->join().graceful, "concurrent notification ordering cleanup");
+            return 0;
+        }
+        if (argc == 2 && std::string(argv[1]) == "stale") {
+            auto c = start("stale");
+            c->createSession(24, 80);
+            auto old = c->endpoint(event(c, ConnectionEvent::Kind::Created).session);
+            auto first = old->readChunk();
+            old->consumed(first.bytes.size());
+            auto end = old->readChunk();
+            old->flushed(end.sequence);
+            event(c, ConnectionEvent::Kind::Exited);
+            c->closeSession(old->metadata().id);
+            event(c, ConnectionEvent::Kind::Closed);
+            c->createSession(24, 80);
+            auto current = c->endpoint(event(c, ConnectionEvent::Kind::Created).session);
+            check(current.get() != old.get() && current->metadata().id == old->metadata().id,
+                  "synthetic retired-ID reuse creates a separate endpoint binding");
+            auto data = current->readChunk();
+            current->consumed(data.bytes.size());
+            auto final = current->readChunk();
+            old->consumed(3);
+            old->flushed(final.sequence);
+            check(current->metadata().state == SessionState::Running,
+                  "old cancelled handle cannot commit a new endpoint's final status");
+            check(old->metadata().state == SessionState::Closed &&
+                      old->readChunk().kind == TransportChunk::Kind::Lost,
+                  "old binding remains Closed/cancelled");
+            current->flushed(final.sequence);
+            event(c, ConnectionEvent::Kind::Exited);
+            c->shutdown();
+            check(c->join().graceful, "stale binding cleanup");
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "correlations") {
             auto c = start("early-shutdown");
             c->createSession(24, 80);
