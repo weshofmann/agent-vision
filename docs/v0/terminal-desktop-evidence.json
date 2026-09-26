@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "source_code_sha": "5d0cd31d9bf91af90dc8c0fe3ad48e3ed975a34d",
+  "qualified_platform": "macOS arm64",
+  "build": "Debug; Apple Clang 21; CMake 3.31.10",
+  "upstream_revisions": {
+    "tvterm": "210eb23564da06c358d2623388939bb02f7f3419",
+    "tvision": "640263136daa67b96a90c9bf6eb8816216ff76a3",
+    "libvterm": "62b27d1db0c49eed55936a1bfa35102be91afe42"
+  },
+  "fresh_default_fetch_build": true,
+  "ctest_passed": 10,
+  "ctest_failed": 0,
+  "outer_pty_columns_rows": [
+    120,
+    40
+  ],
+  "desktop_assertions": {
+    "interaction": {
+      "two_distinct_pids_and_ptys": true,
+      "independent_cwd_state_and_focus": true,
+      "keyboard_moves_resize_z_order_overlap": true,
+      "a_inner_rows_cols": [
+        23,
+        81
+      ],
+      "b_inner_rows_cols": [
+        24,
+        83
+      ],
+      "exited_output_status_retained": true,
+      "arbitrary_exit_keys_swallowed": true,
+      "explicit_exited_close_survivor_usable": true,
+      "foreground_interrupt_qualified": true,
+      "direct_children_absent_after_exit": true,
+      "inherited_ignored_sigchld_handled": true,
+      "owned_resources": {
+        "initial": {
+          "threads": 5,
+          "fds": 14
+        },
+        "b_retained": {
+          "threads": 3,
+          "fds": 13
+        },
+        "both_retained": {
+          "threads": 1,
+          "fds": 12
+        }
+      },
+      "app_wait_status": 0,
+      "cooked_input_restored": true,
+      "termios_restored_after_input": true
+    },
+    "live_close_quit": {
+      "live_close_cancel_confirm": true,
+      "live_quit_cancel_confirm": true,
+      "direct_children_absent_after_live_close_quit": true,
+      "owned_resources": {
+        "initial": {
+          "threads": 5,
+          "fds": 14
+        },
+        "after_live_close": {
+          "threads": 3,
+          "fds": 13
+        }
+      },
+      "app_wait_status": 0,
+      "cooked_input_restored": true,
+      "termios_restored_after_input": true
+    },
+    "quit_both": {
+      "confirmed_quit_both_live": true,
+      "both_direct_children_absent": true,
+      "app_wait_status": 0,
+      "cooked_input_restored": true,
+      "termios_restored_after_input": true
+    }
+  },
+  "source_sha256": {
+    "patches/tvterm-lifecycle.patch": "5fc4e10b26f7c366c073f40e55f0fa476027afd7d878e5a40d0b61cfe7918b63",
+    "tests/lifecycle.cpp": "f084b88b08afbdfa5f737c71834c3fa1a4fe48d214ce9a996e3905ea58c0cc05",
+    "tests/desktop_pty.py": "47c6444fb0ce7efdb97e439d8c169ff43b6502fd2080d0c976534a9199baef27",
+    "src/main.cpp": "7abc91bb6c7e6ceb8ee36cdaeda0012fcf04d38002c2a27621dcc84ff9f05627",
+    "src/app.cpp": "166a6596689b196b28cae0608caa04b4ac7702714772a25377418316718e86c5",
+    "src/window.cpp": "91cb1e00ed03a05a3017d5dbadf4de287174a53a77ac996b3cfeb6c1d6fac388"
+  },
+  "native_mouse": "unqualified: computer-use tool prohibits Terminal",
+  "evidence_policy": "Whitelisted assertions/counts only; raw captures stay ignored and private. No PID, PTY name, username, hostname, environment dump or absolute workspace path is published.",
+  "limits": [
+    "Direct children only; detached descendants outside ownership guarantee",
+    "Full-screen/SIGWINCH, outer resize, abnormal signals, Unicode/load and wider platforms not qualified",
+    "Final-output draining capped at 64 KiB after direct exit; not unlimited output qualification"
+  ]
+}
