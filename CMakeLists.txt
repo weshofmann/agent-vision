@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.24...3.31)
 project(AgentVision LANGUAGES C CXX)
+include(cmake/GoCore.cmake)
 if(NOT UNIX)
     message(FATAL_ERROR "This slice supports Unix PTYs only")
 endif()
@@ -49,6 +50,7 @@ add_executable(agentvision src/main.cpp src/app.cpp src/window.cpp)
 target_link_libraries(agentvision PRIVATE tvterm-core)
 target_compile_options(agentvision PRIVATE -Wall -Wextra)
 include(CTest)
+agentvision_configure_core()
 if(BUILD_TESTING)
     add_test(NAME source_guard COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_guard.py"
