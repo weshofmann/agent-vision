@@ -1,20 +1,47 @@
 #!/usr/bin/env python3
-"""Apply only the documented downstream patch; never reset an existing tree."""
+"""Validate effective pinned source before applying; never reset existing edits."""
 from pathlib import Path
 import subprocess
 import sys
 
-source, patch = map(Path, sys.argv[1:])
-patch = patch.resolve()
-base = ["git", "-C", str(source), "apply"]
-def check(reverse=False):
-    return subprocess.run(base + (["--reverse"] if reverse else []) + ["--check", str(patch)],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-if check():
+source, patch = (Path(arg).resolve() for arg in sys.argv[1:])
+accepted = patch.read_bytes()
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo), *args])
+
+def effective_diff(repo):
+    # HEAD is the baseline, not the index. Force dependency visibility and avoid
+    # configured external/textconv output masking the source that will compile.
+    return git(repo, 'diff', '--binary', '--no-color', '--no-ext-diff',
+               '--no-textconv', '--ignore-submodules=none', 'HEAD')
+
+def dependencies(repo):
+    # Read gitlinks from the pinned commit, not from a potentially edited index.
+    for record in git(repo, 'ls-tree', '-rz', 'HEAD').split(b'\0'):
+        if not record: continue
+        metadata, path = record.split(b'\t', 1)
+        mode, _, expected = metadata.split()
+        if mode != b'160000': continue
+        child = repo / path.decode('utf-8', 'surrogateescape')
+        top = Path(git(child, 'rev-parse', '--show-toplevel').decode().strip()).resolve()
+        if top != child.resolve() or git(child, 'rev-parse', 'HEAD').strip() != expected:
+            sys.exit('Dependency is uninitialized or differs from the pinned gitlink')
+        if effective_diff(child):
+            sys.exit('Unexpected tracked dependency edits; source left unchanged')
+        dependencies(child)
+
+dependencies(source)
+actual = effective_diff(source)
+if actual not in (b'', accepted):
+    sys.exit('Unexpected tracked upstream edits; source left unchanged')
+
+base = ['git', '-C', str(source), 'apply']
+# Validate before applying, so rejection cannot add even the accepted patch.
+check = base + (['--reverse'] if actual else []) + ['--check', str(patch)]
+if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+    sys.exit('Downstream patch does not match pinned source; source left unchanged')
+if not actual:
     subprocess.run(base + [str(patch)], check=True)
-elif not check(reverse=True):
-    sys.exit("Downstream patch does not match source; use a fresh build directory, never reset user changes")
-# Detect unexpected changes rather than silently build a different core.
-actual = subprocess.check_output(["git", "-C", str(source), "diff", "--binary", "--no-color", "--no-ext-diff"])
-if actual != patch.read_bytes():
-    sys.exit("Unexpected upstream working-tree modifications; use a clean pinned source")
+if effective_diff(source) != accepted:
+    sys.exit('Applied source does not equal the exact accepted patch')

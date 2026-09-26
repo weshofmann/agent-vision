@@ -43,7 +43,10 @@ async-signal-safe operations until `execve` or `_exit(127)`. Master FDs are
 close-on-exec so later shells do not retain another terminal's master.
 
 `cmake/apply_patch.py` applies once or recognizes the exact already-applied patch,
-rejects unexpected tracked source edits, and never resets a working tree. Use a
+validates the complete effective tracked diff against HEAD (including staged
+edits), recursively checks dependency gitlinks/cleanliness, rejects before applying
+anything, and never resets a working tree. Configured submodule-ignore settings
+cannot hide tracked dependency edits. Use a
 fresh build directory after changing patch versions. Focused tests use real PTYs,
 wait statuses, kernel thread counts and FD counts, not mocked lifecycle calls.
 

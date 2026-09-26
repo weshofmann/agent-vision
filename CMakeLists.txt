@@ -50,6 +50,10 @@ target_link_libraries(agentvision PRIVATE tvterm-core)
 target_compile_options(agentvision PRIVATE -Wall -Wextra)
 include(CTest)
 if(BUILD_TESTING)
+    add_test(NAME source_guard COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_guard.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.py")
+    set_tests_properties(source_guard PROPERTIES TIMEOUT 30)
     add_executable(scrollback_lock_test tests/scrollback_lock.cpp)
     target_link_libraries(scrollback_lock_test PRIVATE tvterm-core)
     target_compile_definitions(scrollback_lock_test PRIVATE

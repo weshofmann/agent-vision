@@ -51,9 +51,12 @@ folder when changing the patch. The build copies full upstream notices into
 AgentVision license or redistribution clearance has been selected.
 
 Nine real-PTY lifecycle tests check direct-child status/reaping, blocked I/O,
-foreground hangup and worker/FD completion. On macOS the tenth CTest launches the
+foreground hangup and worker/FD completion. A deterministic scrollbar callback
+test checks lock ordering and event delivery; a real-Git fixture test checks the
+HEAD-based source guard and unchanged rejection. On macOS another CTest launches the
 actual application through a synthetic 120×40 outer PTY and checks independent
-shells, focus, movement/resize, retention, close/quit confirmations, kernel worker
+shells, focus, movement/resize, ordinary finite scrolling followed by input/UI,
+retention, close/quit confirmations, kernel worker
 and FD counts, and normal outer-terminal restoration. Run it separately with:
 
 ```sh

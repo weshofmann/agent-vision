@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""R2: real Git fixtures; staged changes cannot evade the source guard.
+Every rejection must preserve effective files, HEAD and staged entries.
+"""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HELPER = Path(sys.argv.pop(1)).resolve()
+ENV = {**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo), *args], env=ENV,
+                                   stderr=subprocess.DEVNULL)
+
+def init(repo):
+    repo.mkdir(parents=True)
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.name', 'Synthetic Fixture')
+    git(repo, 'config', 'user.email', 'fixture@example.invalid')
+    git(repo, 'config', 'commit.gpgsign', 'false')
+    git(repo, 'config', 'core.hooksPath', '/dev/null')
+
+class SourceGuard(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='agentvision-guard-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)/'source'
+        init(self.root)
+        self.dep = self.root/'deps/fixture'
+        init(self.dep)
+        self.nested = self.dep/'nested'
+        init(self.nested)
+        (self.nested/'nested.cc').write_text('nested baseline\n')
+        git(self.nested, 'add', '.'); git(self.nested, 'commit', '-qm', 'baseline')
+        (self.dep/'dependency.cc').write_text('dependency baseline\n')
+        git(self.dep, 'add', '.'); git(self.dep, 'commit', '-qm', 'baseline')
+        (self.root/'allowed.cc').write_text('before patch\n')
+        (self.root/'source.cc').write_text('unrelated baseline\n')
+        git(self.root, 'add', '.'); git(self.root, 'commit', '-qm', 'pinned fixture')
+        (self.root/'allowed.cc').write_text('accepted patch\n')
+        self.patch = Path(self.tmp.name)/'accepted.patch'
+        self.patch.write_bytes(git(self.root, 'diff', '--binary', '--no-color', '--no-ext-diff', 'HEAD'))
+        (self.root/'allowed.cc').write_text('before patch\n')
+
+    def applied(self): (self.root/'allowed.cc').write_text('accepted patch\n')
+    def snapshot(self):
+        # Compare index meaning, not Git's optional stat-cache metadata.
+        return tuple((git(repo, 'rev-parse', 'HEAD'), git(repo, 'ls-files', '--stage', '-z'),
+                      git(repo, 'diff', '--binary', '--no-ext-diff', 'HEAD'),
+                      tuple((p.relative_to(repo).as_posix(), p.read_bytes())
+                            for p in sorted(repo.rglob('*'))
+                            if p.is_file() and '.git' not in p.relative_to(repo).parts))
+                     for repo in (self.root, self.dep, self.nested))
+    def run_guard(self):
+        return subprocess.run([sys.executable, str(HELPER), str(self.root), str(self.patch)],
+                              env=ENV, capture_output=True, timeout=10)
+    def rejected_unchanged(self):
+        before = self.snapshot()
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0, 'guard accepted modified tracked source')
+        self.assertEqual(before, self.snapshot(), 'rejected fixture was mutated')
+
+    def test_clean_pinned_source_applies_accepted_patch(self):
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.assertEqual((self.root/'allowed.cc').read_text(), 'accepted patch\n')
+        self.assertEqual(git(self.root, 'diff', '--binary', '--no-ext-diff', 'HEAD'), self.patch.read_bytes())
+    def test_exact_already_applied_patch_is_unchanged(self):
+        self.applied(); before = self.snapshot()
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.assertEqual(before, self.snapshot())
+    def test_exact_staged_patch_is_effectively_the_same_source(self):
+        self.applied(); git(self.root, 'add', 'allowed.cc'); before = self.snapshot()
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.assertEqual(before, self.snapshot())
+    def test_unrelated_staged_source_edit_rejected_unchanged(self):
+        self.applied(); (self.root/'source.cc').write_text('unexpected staged edit\n')
+        git(self.root, 'add', 'source.cc'); self.rejected_unchanged()
+    def test_unrelated_unstaged_source_edit_rejected_before_apply(self):
+        (self.root/'source.cc').write_text('unexpected unstaged edit\n')
+        self.rejected_unchanged()
+    def test_dependency_staged_edit_rejected_before_apply(self):
+        (self.dep/'dependency.cc').write_text('dependency staged edit\n')
+        git(self.dep, 'add', 'dependency.cc'); self.rejected_unchanged()
+    def test_dependency_unstaged_edit_rejected_before_apply(self):
+        (self.dep/'dependency.cc').write_text('dependency unstaged edit\n')
+        self.rejected_unchanged()
+    def test_dependency_edit_cannot_hide_behind_git_ignore_config(self):
+        git(self.root, 'config', 'diff.ignoreSubmodules', 'all')
+        (self.dep/'dependency.cc').write_text('ignored dependency edit\n')
+        self.rejected_unchanged()
+    def test_dependency_head_mismatch_rejected_unchanged(self):
+        (self.dep/'dependency.cc').write_text('different dependency revision\n')
+        git(self.dep, 'add', 'dependency.cc'); git(self.dep, 'commit', '-qm', 'different')
+        self.rejected_unchanged()
+    def test_nested_dependency_tracked_edit_rejected_before_apply(self):
+        (self.nested/'nested.cc').write_text('nested dependency edit\n')
+        self.rejected_unchanged()
+
+if __name__ == '__main__': unittest.main()
