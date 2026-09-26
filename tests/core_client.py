@@ -69,6 +69,10 @@ class Client:
         self.outputs = {}
         self.sequence = {}
         self.terminal = set()
+        self.sessions, self.closing, self.closed = set(), set(), set()
+        self.pending = {1: (1, 0, 0)}
+        self.credit_pending, self.consumed = {}, {}
+        self.credit_completions = 0
         self.socket.sendall(HELLO)
         kind, request, session, body = self.read()
         assert (kind, request, session) == (2, 1, 0)
@@ -76,9 +80,54 @@ class Client:
         self.reaped = False
 
     def send(self, kind, session=0, body=b''):
+        if kind == 14:
+            assert session not in self.credit_pending, 'second pending Credit'
+            amount = struct.unpack('!I', body)[0]
+            assert amount > 0
+        else:
+            amount = 0
         self.request += 1
+        self.pending[self.request] = kind, session, amount
+        if kind == 14:
+            self.credit_pending[session] = self.request
+        elif kind == 7:
+            self.closing.add(session)
+        elif kind == 8:
+            self.closing.update(self.sessions)
         self.socket.sendall(HEADER.pack(b'AVCP', 1, kind, 0, 0, len(body), self.request, session) + body)
         return self.request
+
+    def flush_credit(self, session):
+        amount = self.consumed.get(session, 0)
+        if amount and session not in self.credit_pending and session not in self.closed:
+            self.send(14, session, struct.pack('!I', amount))
+            self.consumed[session] = 0
+
+    def complete_request(self, kind, request, session, body):
+        assert request in self.pending, 'unknown or duplicate terminal correlation'
+        sent, expected_session, amount = self.pending[request]
+        assert session == expected_session or (sent == 3 and kind == 4 and session != 0), 'terminal session mismatch'
+        if kind == 12:
+            assert len(body) >= 8 and len(body) == 8 + struct.unpack('!H', body[6:8])[0], 'invalid Error body'
+            code = struct.unpack('!H', body[:2])[0]
+            assert sent == 14 and code == 3 and session in self.closing | self.closed, 'unexpected request Error'
+        elif sent in (5, 6, 8, 14):
+            assert kind == 13 and body == struct.pack('!H', sent), 'terminal type/completed type mismatch'
+        else:
+            assert kind == {1: 2, 3: 4, 7: 11}[sent], 'terminal type mismatch'
+        del self.pending[request]
+        if sent == 3:
+            self.sessions.add(session)
+        if sent == 14:
+            assert self.credit_pending.get(session) == request and amount > 0, 'Credit correlation mismatch'
+            del self.credit_pending[session]
+            self.credit_completions += 1
+            if kind == 13:
+                self.flush_credit(session)
+            else:
+                # UNKNOWN_SESSION while closing means there is no window left
+                # to replenish; retain no unsent balance or replacement request.
+                self.consumed[session] = 0
 
     def exact(self, size):
         data = bytearray()
@@ -100,11 +149,23 @@ class Client:
             assert sequence == self.sequence.get(session, 0) + 1
             self.sequence[session] = sequence
             self.outputs.setdefault(session, bytearray()).extend(body[8:])
-            self.send(14, session, struct.pack('!I', size - 8))
+            self.consumed[session] = self.consumed.get(session, 0) + size - 8
+            self.flush_credit(session)
         elif kind in (10, 11):
+            assert len(body) == (15 if kind == 10 else 8)
+            assert session != 0 and (kind != 10 or request == 0)
+            if kind == 11:
+                self.closed.add(session)
+                # Unsent consumed bytes need no replenishment after close. An
+                # already accepted Credit stays tracked until its own reply.
+                self.consumed[session] = 0
             last = struct.unpack('!Q', body[6:14] if kind == 10 else body)[0]
             assert last == self.sequence.get(session, 0)
             self.terminal.add(session)
+        if request:
+            self.complete_request(kind, request, session, body)
+        else:
+            assert kind in (9, 10, 11), 'unexpected uncorrelated frame'
         frame = kind, request, session, body
         self.frames.append(frame)
         return frame
@@ -136,6 +197,7 @@ class Client:
     def shutdown(self):
         request = self.send(8)
         assert self.await_request(request)[0::3] == (13, b'\x00\x08')
+        assert not self.pending and not self.credit_pending, 'Shutdown left pending responses'
         assert self.socket.recv(1) == b''
         self.socket.close()
         pid, status = os.waitpid(self.pid, 0)
@@ -209,6 +271,26 @@ def main():
         assert all(absent(pid) for pid in owned), 'Shutdown left observed direct child present'
     finally:
         client.cleanup()
+    # A separate large workload exceeds the full receive window, requiring
+    # repeated Credit turnover without changing the idle resource-baseline probe.
+    client = Client(binary)
+    try:
+        session = client.create()
+        client.input(session, b"stty -echo; printf 'STREAM_%s\\n' READY\n")
+        client.marker(session, b'STREAM_READY\r\n')
+        start = len(client.outputs[session])
+        turns = client.credit_completions
+        client.input(session, b"head -c 1048576 /dev/zero | tr '\\000' Z; printf 'TURNOVER_%s\\n' DONE\n")
+        client.marker(session, b'TURNOVER_DONE\r\n')
+        assert client.outputs[session][start:] == b'Z' * 1048576 + b'TURNOVER_DONE\r\n'
+        assert client.credit_completions - turns >= 4, 'large stream did not exercise repeated Credit completion'
+        owned = children(client.pid)
+        assert len(owned) == 1
+        client.shutdown()
+        assert all(absent(pid) for pid in owned), 'large-stream Shutdown left direct child present'
+        turnover_completions = client.credit_completions - turns
+    finally:
+        client.cleanup()
     # A native exec fixture inventories descriptors above stderr and checks the
     # controlling terminal, no-login argv/env and resize signal at exec boundary.
     root = pathlib.Path(__file__).resolve().parents[1]
@@ -254,7 +336,7 @@ def main():
             assert all(absent(pid) for pid in owned), 'failure cleanup left observed direct child present'
         finally:
             client.cleanup()
-    print('PASS: literal golden, input/resize, arbitrary raw bytes, tail/exit7, SIGTERM, Close/Shutdown, FD baseline, native exec FD/tty inventory, endpoint/core-signal/malformed cleanup')
+    print(f'PASS: literal golden, conforming coalesced Credit, 1MiB turnover ({turnover_completions} matched completions), input/resize, arbitrary raw bytes, tail/exit7, SIGTERM, Close/Shutdown, FD baseline, native exec FD/tty inventory, endpoint/core-signal/malformed cleanup')
 
 if __name__ == '__main__':
     main()
