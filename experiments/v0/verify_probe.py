@@ -24,7 +24,8 @@ assert "SURVIVOR A" in screen("10-a-survives")
 assert "(Disconnected)" in screen("11-a-exit")
 # Check measured positions/occlusion of the real outer display, not just markers.
 assert screen("05-b-resized-moved").splitlines()[6].index("╔") == 15
-assert screen("07-a-resized-overlap").splitlines()[6].startswith("║")
+assert screen("07-a-resized-overlap").splitlines()[2].index("╔") == 2
+assert screen("07-a-resized-overlap").splitlines()[6][2] == "║"
 assert screen("08-focus-b-overlap").splitlines()[6].index("╔") == 15
 steps = json.loads((root / "steps.json").read_text())
 result = steps[-1]

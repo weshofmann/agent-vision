@@ -51,10 +51,10 @@ reconstructions, not screenshots from a native terminal application.
 | --- | --- |
 | Two real sessions | Different shell PIDs and `/dev/ttys` paths; each owns an independent `label` variable and prompt. |
 | Focus/input routing | Ctrl-B menu → Tab switches front window. Commands return `FOCUS A` or `FOCUS B` according to focus; A remains 37×118 after only B is resized. |
-| Move/resize/overlap | Ctrl-B → R, arrows move; Shift-arrows resize. B moves 15 columns/right and 5 rows/down, with inner size 25×83; A independently shrinks to 20×68. Snapshots show clipping and front/back changes as focus switches. |
+| Move/resize/overlap | Ctrl-B → R, arrows move; Shift-arrows resize. B moves 15 columns/right and 5 rows/down, with inner size 25×83; A independently shrinks to 20×68 and moves 2 columns/right and 1 row/down. Snapshots show clipping and front/back changes as focus switches. |
 | Child resize propagation | `stty size` in the real child changes from 37×118 to 25×83 (B) and 20×68 (A), consistent with inner viewport dimensions. This verifies TIOCSWINSZ effects, not a SIGWINCH handler test. |
-| Child exits | Sending `exit 7` to B produces “Disconnected”; next key closes that window. A subsequently prints `SURVIVOR A`. A's `exit 0` also produces “Disconnected”. Numeric child status is **not** exposed by the existing UI. A process-state check found B still a zombie after its window closed; this is a real qualification failure, not just an untested concern. |
-| Outer restoration | Final result and limitations are recorded in [probe results](evidence/README.md); all restoration claims are restricted to the measured attributes and escape sequences. |
+| Child exits | Sending `exit 7` to B produces “Disconnected”; next key closes that window. A subsequently prints `SURVIVOR A`. A's `exit 0` also produces “Disconnected”. Numeric child status is **not** exposed by the existing UI. A process-state check found B still a zombie after its window closed; this is an observed intermittent qualification failure: a later run did reap B. Do not infer reliable cleanup from one passing run. |
+| Outer restoration | Quit returned 0, alternate-screen enter/leave emitted, and cooked input recovered. Immediate termios differed only by PENDIN; after reading the sentinel input every field matched the original. See [results](evidence/README.md). Visual restoration in a native terminal remains untested. |
 | Title anomaly | OSC 0 title appears as `SShheellll  AA`/`BB` in emitted output/snapshots. Source suggests shared fragment accumulation for both ICONNAME and TITLE; no fix or full causal confirmation is included. |
 
 Untested: physical keyboard/mouse dragging in the user's terminal app; outer

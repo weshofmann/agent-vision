@@ -150,6 +150,9 @@ try:
         send("\x1b[1;2D")
     for _ in range(17):
         send("\x1b[1;2A")
+    send("\x1b[C")
+    send("\x1b[C")
+    send("\x1b[B")
     send("\r")
     shell("printf 'FOCUS %s SIZE ' \"$label\"; stty size")
     snapshot("07-a-resized-overlap")
