@@ -1,7 +1,7 @@
 # Go core PR1 implementation and qualification
 
-Status: Tasks 1–6 implemented and task reviews closed; whole-PR review and operator acceptance pending. This PR executes Tasks
-1–6 of the [approved migration plan](../superpowers/plans/2026-09-26-go-core-migration-plan.md),
+Status: Tasks 1–6 implemented and task reviews closed; whole-PR review and
+operator acceptance pending. This PR executes Tasks 1–6 of the [approved migration plan](../superpowers/plans/2026-09-26-go-core-migration-plan.md),
 following [operator plan approval](https://github.com/weshofmann/agent-vision/pull/5#issuecomment-5847740056).
 Base: merged architecture/plan on main `6fdce934d0baf12d5471e2f617324ac76ac54939`.
 
@@ -17,8 +17,8 @@ Task checkpoints and exact tested SHAs are recorded on the Draft PR. Required
 final evidence: race suite, two 30-second protocol fuzz runs, 500-cycle native
 reaper stress, startup/cancellation/credit/seal barriers, synthetic client and
 unchanged V0 CTests. Independent Astra/high protocol/lifecycle/concurrency review
-precedes operator PR1 acceptance. Tests below will record actual results as work
-is completed; this initial checkpoint makes no runtime-success claim.
+precedes operator PR1 acceptance. The record distinguishes source checkpoints,
+later fixes and final-head verification; the Draft PR records the current gate.
 
 ## Qualification record
 
@@ -152,7 +152,10 @@ unqualified-platform guarantee is implied.
 Reproduce the independent literal client checks with
 `python3 tests/core_client_test.py`; run the native client with
 `python3 tests/core_client.py build-core/agentvision-core` after the opt-in build.
-The final P-D4 commands are `GODEBUG=execwait=2 GOGC=1 go -C core test -race
-./... -count=1 -timeout=120s` and the same environment with `go -C core test
--race ./internal/session -run '^TestSerializedReaper$' -count=10 -timeout=120s`.
-Use the explicitly qualified Go executable and local module/cache policy.
+Use the explicitly qualified Go executable and local module/cache policy for
+these final P-D4 commands:
+
+```sh
+GODEBUG=execwait=2 GOGC=1 go -C core test -race ./... -count=1 -timeout=120s
+GODEBUG=execwait=2 GOGC=1 go -C core test -race ./internal/session -run '^TestSerializedReaper$' -count=10 -timeout=120s
+```
