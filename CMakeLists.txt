@@ -68,6 +68,16 @@ if(BUILD_TESTING)
         target_compile_options(core_connection_test PRIVATE -Wall -Wextra -Wpedantic)
         target_compile_definitions(core_connection_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
         add_test(NAME core_connection COMMAND core_connection_test)
+        # Separate instrumented binary: no race barriers in the shipping library.
+        add_executable(core_connection_credit_race_test tests/core_connection_credit_race.cpp
+            src/core_protocol.cpp src/core_process.cpp src/core_connection.cpp)
+        target_include_directories(core_connection_credit_race_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_link_libraries(core_connection_credit_race_test PRIVATE Threads::Threads)
+        target_compile_options(core_connection_credit_race_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(core_connection_credit_race_test PRIVATE AGENTVISION_CREDIT_RACE_TEST
+            FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
+        add_test(NAME core_connection_credit_race COMMAND core_connection_credit_race_test)
+        set_tests_properties(core_connection_credit_race PROPERTIES TIMEOUT 20)
         foreach(case IN ITEMS flush-close stale correlations controls policy zero cycles failures credit blocked partial stopped uncertain)
             add_test(NAME core_connection_${case} COMMAND core_connection_test ${case})
             set_tests_properties(core_connection_${case} PROPERTIES TIMEOUT 25)

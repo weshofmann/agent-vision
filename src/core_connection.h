@@ -120,6 +120,7 @@ class CoreConnection {
     void lose(ContactError) noexcept;
     bool dispatch(const Frame &);
     void endpointFlushed(SessionEndpoint &, uint64_t) noexcept;
+    RequestId admitCredit(SessionId, uint32_t, const SessionEndpoint *source);
     std::unique_ptr<State> state_;
 };
 } // namespace agentvision

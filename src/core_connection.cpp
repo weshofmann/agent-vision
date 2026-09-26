@@ -14,6 +14,14 @@
 #include <thread>
 #include <unistd.h>
 namespace agentvision {
+#ifdef AGENTVISION_CREDIT_RACE_TEST
+// Linked only by the separate instrumented regression executable.
+namespace credit_race_test {
+void beforeAdmission(SessionEndpoint *);
+void afterAdmission(SessionEndpoint *, RequestId);
+bool holdQuietCredit() noexcept;
+} // namespace credit_race_test
+#endif
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr size_t Window = 262144, MaxChunks = 128, MaxSessions = 16;
@@ -205,8 +213,17 @@ void SessionEndpoint::consumed(size_t bytes) noexcept {
         id = state_->visible.id;
         amount = state_->consumedPending;
     }
+#ifdef AGENTVISION_CREDIT_RACE_TEST
+    credit_race_test::beforeAdmission(this);
+#endif
+    RequestId admitted = 0;
     if (auto c = connection_.lock())
-        c->returnCredit(id, uint32_t(amount));
+        admitted = c->admitCredit(id, uint32_t(amount), this);
+#ifdef AGENTVISION_CREDIT_RACE_TEST
+    credit_race_test::afterAdmission(this, admitted);
+#else
+    (void)admitted;
+#endif
 }
 SessionMetadata SessionEndpoint::metadata() const noexcept {
     std::lock_guard<std::mutex> lock(state_->mutex);
@@ -444,15 +461,22 @@ RequestId CoreConnection::closeSession(SessionId id) {
     }
 }
 RequestId CoreConnection::returnCredit(SessionId id, uint32_t amount) {
+    return admitCredit(id, amount, nullptr);
+}
+RequestId CoreConnection::admitCredit(SessionId id, uint32_t amount,
+                                      const SessionEndpoint *source) {
     try {
         std::lock_guard<std::mutex> lock(state_->mutex);
         auto it = state_->sessions.find(id);
         if (state_->stopped || state_->shutdown || it == state_->sessions.end() ||
-            it->second.credit || !amount)
+            it->second.credit || !amount || (source && it->second.endpoint.get() != source))
             return 0;
         auto &e = *it->second.endpoint->state_;
         std::lock_guard<std::mutex> q(e.mutex);
-        if (amount > e.consumedPending || amount > e.rawOutstanding)
+        // Endpoint callbacks carry binding authority, not merely an opaque ID.
+        // Validate it atomically with credit reservation in connection->endpoint order.
+        if ((source && (e.cancelled || e.lost || it->second.closed)) ||
+            amount > e.consumedPending || amount > e.rawOutstanding)
             return 0;
         Frame f;
         f.type = MessageType::OutputCredit;
@@ -814,6 +838,10 @@ void CoreConnection::writer() noexcept {
                     auto &s = entry.second;
                     if (state_->shutdown || s.credit)
                         continue;
+#ifdef AGENTVISION_CREDIT_RACE_TEST
+                    if (credit_race_test::holdQuietCredit())
+                        continue;
+#endif
                     auto &e = *s.endpoint->state_;
                     std::lock_guard<std::mutex> q(e.mutex);
                     if (!e.consumedPending)
