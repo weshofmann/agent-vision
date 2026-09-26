@@ -200,6 +200,35 @@ in a PR comment. Keep the PR in draft; do not merge.
 
 ## Safety and evidence
 
+### Public repository hygiene
+
+Treat tracked files, Git history, branches, tags, PR content, review artifacts,
+and committed evidence as public and effectively permanent.
+
+- Never commit or publish credentials, API keys, access or refresh tokens,
+  cookies, authorization headers, private keys, recovery material, production
+  identifiers, or configuration containing secret values. Redacting only part
+  of a live secret is not sufficient; use a synthetic replacement.
+- Keep private transcripts, prompts, emails, chat logs, personal files, personal
+  or private contact information, and unrelated user data out of the repository.
+  Intentional public Git attribution and explicitly approved project contact
+  information are allowed.
+- Do not record machine-specific usernames, home directories, absolute workspace
+  paths, hostnames, IP addresses, device identifiers, serial numbers, internal
+  service URLs, or unredacted environment, configuration, process, or filesystem
+  dumps. Use placeholders such as `<workspace>`, `<user>`, and `$HOME`. Retain a
+  standard platform path only when it is technically relevant, reproducible, and
+  does not identify a particular user or machine.
+- Logs, terminal captures, screenshots, generated manifests, archives, and
+  compressed evidence can disclose data indirectly. Generate them with synthetic
+  inputs, capture only what the claim requires, and inspect both the source and
+  decoded or rendered contents before staging. `.gitignore` is not a substitute
+  for reviewing generated evidence.
+- If sensitive data is discovered, stop publication, determine its exposure,
+  revoke or rotate any affected secret, and remove it from the current tree.
+  Coordinate before rewriting shared history; a later deletion commit does not
+  remove earlier Git objects, forks, caches, or previously published artifacts.
+
 - Treat terminal windows and PTYs as interfaces, not security sandboxes. Do not
   claim process, filesystem, credential, or provider isolation without implementing
   and verifying the relevant boundary.
