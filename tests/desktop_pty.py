@@ -12,6 +12,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import secrets
 import signal
 import struct
 import subprocess
@@ -24,6 +25,12 @@ class Screen(pyte.Screen):
     def set_margins(self, *args, private=False):
         if not private:
             super().set_margins(*args)
+
+def size_response_present(screen, nonce, rows, cols):
+    # A fresh response cannot be a prior viewport or the printf command echo.
+    # Inspect reconstructed cells: the compositor may emit cursor movement in
+    # place of the space between stty's two dimensions.
+    return f'SCROLL_SIZE_{nonce}_{rows} {cols}' in '\n'.join(screen.display)
 
 def resources(pid):
     """Only counts for the owned app PID; no process/FD names are captured."""
@@ -308,8 +315,10 @@ def scrolling(binary, folder):
         d.wait(lambda: b'AFTER_SCROLL_INPUT' in d.raw, 'shell input after scroll failed')
         d.menu('r'); d.send('\x1b[C' + '\x1b[1;2D' + '\r')
         rows, cols = inner(d.bounds('B'))
-        d.command("printf 'SCROLL_SIZE_'; stty size")
-        d.wait(lambda: f'SCROLL_SIZE_{rows} {cols}'.encode() in d.raw, 'scroll/resize child size mismatch')
+        nonce = secrets.token_hex(4)
+        d.command(f"printf 'SCROLL_SIZE_%s_' {nonce}; stty size")
+        d.wait(lambda: size_response_present(d.screen, nonce, rows, cols),
+               'scroll/resize child size mismatch')
         d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'scrolling live-close confirmation missing')
         d.confirm(True)
         d.wait(lambda: not d.contains('Terminal B ['), 'scrolling B close failed')
