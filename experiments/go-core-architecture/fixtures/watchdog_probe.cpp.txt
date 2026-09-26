@@ -1,0 +1,320 @@
+#include <spawn.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <unistd.h>
+#include <limits.h>
+
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <iostream>
+#include <mutex>
+#include <string>
+#include <thread>
+
+extern char **environ;
+
+namespace {
+using Clock = std::chrono::steady_clock;
+constexpr auto kDeadline = std::chrono::seconds(2);
+constexpr auto kTermGrace = std::chrono::milliseconds(250);
+constexpr auto kReapBudget = std::chrono::seconds(1);
+constexpr int kChildSocket = 3;
+
+enum class ReapState { running, reaped, error };
+
+struct Child {
+  pid_t pid = -1;
+  int socket = -1;
+  ReapState state = ReapState::running;
+  int wait_status = 0;
+  bool forced = false;
+  bool term_sent = false;
+  bool kill_sent = false;
+};
+
+bool set_cloexec(int fd) {
+  int flags = fcntl(fd, F_GETFD);
+  return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0;
+}
+
+bool reap_nonblocking(Child &child) {
+  if (child.state != ReapState::running) return child.state == ReapState::reaped;
+  for (;;) {
+    pid_t result = waitpid(child.pid, &child.wait_status, WNOHANG);
+    if (result == child.pid) {
+      child.state = ReapState::reaped;
+      return true;
+    }
+    if (result == 0) return false;
+    if (result < 0 && errno == EINTR) continue;
+    child.state = ReapState::error;
+    return false;
+  }
+}
+
+bool wait_until(Child &child, Clock::time_point deadline) {
+  while (Clock::now() < deadline) {
+    if (reap_nonblocking(child)) return true;
+    if (child.state == ReapState::error) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return reap_nonblocking(child);
+}
+
+// Only this lifecycle owner calls waitpid or signals the child. An unreaped
+// child keeps its PID reserved, so a WNOHANG check followed by kill cannot hit
+// a reused PID. No signal is sent after waitpid has reported the child reaped.
+bool signal_if_owned(Child &child, int signal_number) {
+  if (child.state != ReapState::running) return false;
+  if (reap_nonblocking(child)) return false;
+  if (child.state != ReapState::running) return false;
+  return kill(child.pid, signal_number) == 0 || errno == EINTR;
+}
+
+bool send_byte(int fd, char value) {
+  for (;;) {
+    ssize_t n = write(fd, &value, 1);
+    if (n == 1) return true;
+    if (n < 0 && errno == EINTR) continue;
+    return false;
+  }
+}
+
+bool read_byte_until(int fd, char expected, Clock::time_point deadline) {
+  while (Clock::now() < deadline) {
+    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+    pollfd pfd{fd, POLLIN, 0};
+    int timeout = static_cast<int>(left.count());
+    int result = poll(&pfd, 1, timeout > 0 ? timeout : 1);
+    if (result < 0 && errno == EINTR) continue;
+    if (result <= 0) continue;
+    char actual = 0;
+    ssize_t n = read(fd, &actual, 1);
+    if (n == 1) return actual == expected;
+    if (n < 0 && errno == EINTR) continue;
+    return false;
+  }
+  return false;
+}
+
+int fixture(const std::string &mode) {
+  signal(SIGTERM, SIG_IGN);
+  const int fd = kChildSocket;
+  if (mode == "handshake-stall") {
+    // Accept the real stream but never answer the synthetic handshake byte.
+    for (;;) pause();
+  }
+  if (!read_byte_until(fd, 'H', Clock::now() + std::chrono::seconds(5))) return 20;
+  if (mode != "running-stall" && mode != "stopped") return 21;
+  if (!send_byte(fd, 'h')) return 22;
+  for (;;) {
+    char command = 0;
+    ssize_t n = read(fd, &command, 1);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) return 23;
+    if (command == 'S') {
+      // Deliberately accept Shutdown and then ignore it.
+      for (;;) pause();
+    }
+  }
+}
+
+bool spawn_fixture(const char *self, const std::string &mode, Child &child) {
+  int pair[2] = {-1, -1};
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return false;
+  int parent_fd = fcntl(pair[0], F_DUPFD_CLOEXEC, 20);
+  int child_fd = fcntl(pair[1], F_DUPFD_CLOEXEC, 21);
+  close(pair[0]);
+  close(pair[1]);
+  if (parent_fd < 0 || child_fd < 0) {
+    if (parent_fd >= 0) close(parent_fd);
+    if (child_fd >= 0) close(child_fd);
+    return false;
+  }
+
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0) {
+    close(parent_fd);
+    close(child_fd);
+    return false;
+  }
+  bool actions_ok = posix_spawn_file_actions_adddup2(&actions, child_fd, kChildSocket) == 0 &&
+                    posix_spawn_file_actions_addclose(&actions, parent_fd) == 0 &&
+                    posix_spawn_file_actions_addclose(&actions, child_fd) == 0;
+  if (!actions_ok) {
+    posix_spawn_file_actions_destroy(&actions);
+    close(parent_fd);
+    close(child_fd);
+    return false;
+  }
+  char *const argv[] = {const_cast<char *>(self), const_cast<char *>("--fixture"),
+                        const_cast<char *>(mode.c_str()), nullptr};
+  pid_t pid = -1;
+  int spawn_error = posix_spawn(&pid, self, &actions, nullptr, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(child_fd);
+  if (spawn_error != 0) {
+    close(parent_fd);
+    return false;
+  }
+  if (!set_cloexec(parent_fd)) {
+    // Adopt the child before rollback; the same lifecycle owner reaps it.
+    child.pid = pid;
+    child.socket = parent_fd;
+    signal_if_owned(child, SIGKILL);
+    wait_until(child, Clock::now() + kReapBudget);
+    return false;
+  }
+  child.pid = pid;
+  child.socket = parent_fd;
+  return true;
+}
+
+struct LocalWorkers {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool cancelled = false;
+  bool workers_stopped = false;
+  bool outer_terminal_restored = false;
+  std::thread presentation;
+
+  void start() {
+    presentation = std::thread([this] {
+      std::unique_lock<std::mutex> lock(mutex);
+      cv.wait(lock, [this] { return cancelled; });
+    });
+  }
+
+  void cancel_join_and_restore() {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      cancelled = true;
+    }
+    cv.notify_all();
+    if (presentation.joinable()) presentation.join();
+    workers_stopped = !presentation.joinable();
+    if (workers_stopped) {
+      std::cout << "local_workers=stopped outer_terminal=restored\n";
+      outer_terminal_restored = true;
+    }
+  }
+};
+
+bool run_case(const char *self, const std::string &mode) {
+  const auto case_start = Clock::now();
+  Child child;
+  LocalWorkers local;
+  local.start();
+  if (!spawn_fixture(self, mode, child)) {
+    local.cancel_join_and_restore();
+    std::cout << "mode=" << mode << " result=spawn-failed\n";
+    return false;
+  }
+
+  bool handshake_ok = false;
+  bool shutdown_sent = false;
+  bool shutdown_ack = false;
+  Clock::time_point deadline_start = Clock::now();
+  if (mode == "handshake-stall") {
+    send_byte(child.socket, 'H');
+    deadline_start = Clock::now();
+    handshake_ok = read_byte_until(child.socket, 'h', Clock::now() + kDeadline);
+  } else {
+    handshake_ok = send_byte(child.socket, 'H') &&
+                    read_byte_until(child.socket, 'h', Clock::now() + kDeadline);
+    if (handshake_ok && mode == "stopped") {
+      // Suspend the fixture after handshake; it cannot service Shutdown.
+      if (!signal_if_owned(child, SIGSTOP)) handshake_ok = false;
+    }
+    if (handshake_ok) shutdown_sent = send_byte(child.socket, 'S');
+    if (shutdown_sent) {
+      deadline_start = Clock::now();
+      shutdown_ack = read_byte_until(child.socket, 's', deadline_start + kDeadline);
+    }
+  }
+  const auto deadline_elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - deadline_start);
+
+  bool naturally_reaped = child.state == ReapState::reaped || reap_nonblocking(child);
+  // The deadline cancels local stream I/O before process escalation begins.
+  if (child.socket >= 0) {
+    shutdown(child.socket, SHUT_RDWR);
+    close(child.socket);
+    child.socket = -1;
+  }
+  local.cancel_join_and_restore();
+  const bool restored_before_final_reap = local.workers_stopped && local.outer_terminal_restored;
+  if (!naturally_reaped && child.state == ReapState::running) {
+    child.forced = true;
+    child.term_sent = signal_if_owned(child, SIGTERM);
+    wait_until(child, Clock::now() + kTermGrace);
+  }
+
+  if (child.state == ReapState::running) child.kill_sent = signal_if_owned(child, SIGKILL);
+
+  if (child.state == ReapState::running) wait_until(child, Clock::now() + kReapBudget);
+  const bool reaped = child.state == ReapState::reaped;
+  const bool killed_by_sigkill = reaped && WIFSIGNALED(child.wait_status) &&
+                                 WTERMSIG(child.wait_status) == SIGKILL;
+  bool second_wait_is_echild = false;
+  if (reaped) {
+    int second_status = 0;
+    errno = 0;
+    second_wait_is_echild = waitpid(child.pid, &second_status, WNOHANG) == -1 && errno == ECHILD;
+  }
+  const auto total_elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - case_start);
+  const bool expected_stage = mode == "handshake-stall"
+                                  ? (!handshake_ok && !shutdown_sent)
+                                  : (handshake_ok && shutdown_sent && !shutdown_ack);
+  const bool assertions_pass =
+      expected_stage && deadline_elapsed >= std::chrono::milliseconds(2000) &&
+      total_elapsed <= std::chrono::seconds(5) && child.term_sent && child.kill_sent &&
+      child.forced && killed_by_sigkill && reaped && restored_before_final_reap &&
+      second_wait_is_echild;
+  std::cout << "mode=" << mode
+            << " handshake=" << (handshake_ok ? "ok" : "timeout")
+            << " shutdown=" << (mode == "handshake-stall" ? "not-sent" :
+                                  (shutdown_ack ? "acknowledged" :
+                                   (shutdown_sent ? "deadline-unanswered" : "not-sent")))
+            << " term=" << (child.term_sent ? "sent" : "not-needed-or-failed")
+            << " kill=" << (child.kill_sent ? "sent" : "not-needed-or-failed")
+            << " core=" << (reaped ? (child.forced ? "reaped-forced" : "reaped-natural") :
+                                      (child.state == ReapState::error ? "wait-error" : "unreaped-unknown"))
+            << " shell_cleanup=" << (child.forced ? "unknown-after-forced-core-death" : "not-claimed")
+            << " restore_before_final_reap=" << (restored_before_final_reap ? "yes" : "no")
+            << " second_wait=" << (second_wait_is_echild ? "ECHILD" : "not-reaped-or-unexpected")
+            << " stage_ms=" << deadline_elapsed.count()
+            << " total_ms=" << total_elapsed.count()
+            << " wait_status=" << (killed_by_sigkill ? "SIGKILL" : "unexpected")
+            << " assertions=" << (assertions_pass ? "pass" : "fail")
+            << "\n";
+  return assertions_pass;
+}
+
+std::string executable_path(const char *argv0) {
+  char resolved[PATH_MAX];
+  if (realpath(argv0, resolved)) return resolved;
+  return argv0;
+}
+}  // namespace
+
+int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
+  if (argc == 3 && std::string(argv[1]) == "--fixture") return fixture(argv[2]);
+  if (argc != 2 || std::string(argv[1]) != "--self-test") {
+    std::cerr << "usage: watchdog_probe --self-test\n";
+    return 2;
+  }
+  const std::string self = executable_path(argv[0]);
+  bool ok = true;
+  ok &= run_case(self.c_str(), "running-stall");
+  ok &= run_case(self.c_str(), "stopped");
+  ok &= run_case(self.c_str(), "handshake-stall");
+  return ok ? 0 : 1;
+}

@@ -1,0 +1,17 @@
+// Disposable os.StartProcess/single-owner reaper feasibility alternative.
+package main
+import("bytes";"fmt";"os";"syscall";"time";"github.com/creack/pty")
+func main(){for i:=0;i<100;i++{
+ master,slave,e:=pty.Open();if e!=nil{panic(e)}
+ if e=pty.Setsize(master,&pty.Winsize{Rows:24,Cols:80});e!=nil{panic(e)}
+ proc,e:=os.StartProcess("/bin/sh",[]string{"/bin/sh","-c","stty -echo; printf READY; read x; exit 17"},&os.ProcAttr{Env:[]string{"PATH=/usr/bin:/bin","HOME=/nonexistent"},Files:[]*os.File{slave,slave,slave},Sys:&syscall.SysProcAttr{Setsid:true,Setctty:true,Ctty:0}})
+ slave.Close();if e!=nil{master.Close();panic(e)}
+ fd:=int(master.Fd());if e=syscall.SetNonblock(fd,true);e!=nil{panic(e)}
+ b:=make([]byte,4096);var out []byte;deadline:=time.Now().Add(time.Second)
+ for !bytes.Contains(out,[]byte("READY"))&&time.Now().Before(deadline){n,e:=syscall.Read(fd,b);if n>0{out=append(out,b[:n]...)};if e!=nil&&e!=syscall.EAGAIN&&e!=syscall.EINTR{panic(e)};time.Sleep(time.Millisecond)}
+ if !bytes.Contains(out,[]byte("READY")){panic("ready bound")}
+ if i%2==0{syscall.Write(fd,[]byte("done\n"))}else{master.Close()}
+ var s syscall.WaitStatus;reaped:=false;signalSent:=false;start:=time.Now()
+ for time.Since(start)<time.Second {n,e:=syscall.Wait4(proc.Pid,&s,syscall.WNOHANG,nil);if n==proc.Pid{reaped=true;break};if e!=nil&&e!=syscall.EINTR{panic(e)};if !signalSent&&time.Since(start)>250*time.Millisecond{if e=syscall.Kill(proc.Pid,syscall.SIGKILL);e!=nil&&e!=syscall.ESRCH{panic(e)};signalSent=true};time.Sleep(time.Millisecond)}
+ if !reaped{panic("reap bound")};master.Close();proc.Release();if i%2==0&&(!s.Exited()||s.ExitStatus()!=17){panic("status")}
+};fmt.Println("os.StartProcess + pty.Open: 100 serialized natural/close cycles passed")}

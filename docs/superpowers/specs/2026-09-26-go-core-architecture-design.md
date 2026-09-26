@@ -81,7 +81,7 @@ bytes, independent of any text encoding.
 | Offset | Bytes | Field |
 | --- | --- | --- |
 | 0 | 4 | ASCII AVCP |
-| 4 | 2 | Major version; 0 during Hello/HelloAck, 1 after negotiation |
+| 4 | 2 | Major version; 0 during handshake (including handshake Error), 1 after negotiation |
 | 6 | 2 | Message type |
 | 8 | 2 | Flags; zero in v1 |
 | 10 | 2 | Reserved; zero |
@@ -107,7 +107,13 @@ fatal. Valid requests against wrong state/session return correlated Error and
 leave connection usable.
 
 Frontend request IDs strictly increase, are nonzero, never reused; wrap closes the
-connection. At most 64 outstanding globally. Every accepted request receives one
+connection. At most 81 outstanding globally in separate bounded lanes: 48 ordinary
+(Hello/Create/Input/Resize), 16 Credit (one/session), 16 Close (one/session), and
+one Shutdown. Ordinary saturation cannot consume control correlation slots.
+Excess ordinary requests receive immediate LIMIT without entering work queues;
+bounded Error capacity exhaustion instead fails the connection. Duplicate pending
+Credit/Close for one session is STATE, not another reserved slot. Every accepted
+request receives one
 terminal correlated response; across sessions replies may arrive out of order.
 Async events have request=0. Core IDs are nonzero opaque u64, never reused within
 backend epoch; epoch+ID identifies a run. Do not encode PID/address or claim v1
@@ -130,8 +136,11 @@ IDs survive a backend restart. Future persistence requires negotiated semantics.
 | 13 Ack | B→F | u16 completed request type; Input means all bytes written, Resize means ioctl applied, Shutdown means owned cleanup complete |
 | 14 OutputCredit | F→B | u32 returned raw-byte credit; correlated Ack after accounting validation; excludes header/sequence overhead |
 
-Error codes: VERSION, PROTOCOL, UNKNOWN_SESSION, STATE, LIMIT, SPAWN, PTY_IO,
-INPUT_TIMEOUT, RESIZE, STATUS_UNAVAILABLE, INTERNAL. Unknown/released IDs return
+Error code numbers 1..11, respectively: VERSION, PROTOCOL, UNKNOWN_SESSION, STATE,
+LIMIT, SPAWN, PTY_IO, INPUT_TIMEOUT, RESIZE, STATUS_UNAVAILABLE, INTERNAL. All body
+schemas are exact (no trailing bytes). Exit value is 0..255; signal is a nonzero
+core-platform signal number displayed as such, not a cross-platform signal ABI.
+Unknown/released IDs return
 UNKNOWN_SESSION, including repeat Close; no retry/idempotency framework. Input
 failure includes exact written prefix, zero before first write; no automatic
 retry. Unavailable status has value=0, never success. coreDump=0 except signals.
@@ -139,9 +148,11 @@ No native wait bitfield on wire. Drain reasons: EOF=1, no-data=2, byte-cap=3,
 time-cap=4, credit-cap=5, I/O-error=6, explicit-close=7. Caps/error/close indicate
 possible unread tail loss; even EOF does not promise descendant supervision.
 
-Accepted per-session commands apply in wire admission order. Input and resize
-share one queue; resize cannot overtake unfinished input. Close/Shutdown are
-cancellation barriers: stop admission, report cancelled requests with STATE or
+Accepted PTY Input/Resize commands apply in wire admission order and share one
+queue; resize cannot overtake unfinished input. Credit updates are decoder-side
+accounting and bypass PTY work, including blocked writes. Close/Shutdown also bypass
+that queue as cancellation barriers: their legality/progress never depends on an
+ordinary correlation slot. They stop admission, report cancelled requests with STATE or
 partial input errors, seal already observed output, then lifecycle. They may
 interrupt unfinished/queued commands, but never silently discard completion.
 Per-session output/lifecycle FIFO holds regardless of inter-session scheduling.
@@ -153,6 +164,7 @@ stateDiagram-v2
     [*] --> Starting: Create admitted
     Starting --> Live: PTY + spawn / Created
     Starting --> [*]: rollback / Error
+    Starting --> Closing: shutdown or endpoint loss
     Live --> Draining: child status captured
     Live --> Closing: Close, shutdown, loss, resource failure
     Draining --> Exited: output seal / Exited
@@ -174,10 +186,38 @@ awaits correlated Closed asynchronously, then destroys presentation. Exit/loss
 preserves local scroll/selection. Contact loss is displayed as backend lost,
 without manufacturing a wait result.
 
+### Starting reservation and shutdown linearization
+
+Connection admission is serialized: validate Create and register a Starting
+reservation (request ID, internal session ID, cancellation token, resource owner)
+before dispatching any open/spawn work. Reservations count against the 16-session
+limit. Shutdown/EOF takes that same admission boundary, stops new admissions and
+marks every in-flight reservation cancelled, not just already-live registry entries.
+The reservation owns every FD/child returned by work even if cancellation occurs
+inside an open/spawn call; it adopts and rolls back the result before resolving.
+
+Before open: cancel without acquiring resources. After open: close master/slave.
+After spawn: adopt the child, close parent slave, run normal owned teardown/reap.
+Before Created publication: the same admission boundary chooses either Created
+commit or cancellation, never both. If cancellation wins on a usable connection,
+Create receives exactly one Error(STATE), no public lifecycle for unpublished ID.
+Do not start public session output/input dispatch until Created commit; early child
+output stays in the PTY kernel buffer, still owned by the Starting reservation.
+If Created already committed, Create succeeds and normal Exited/Closed follows.
+EOF suppresses undeliverable replies but not ownership cleanup. Shutdown joins all
+start completions and session cleanup before Ack: no child or Created can emerge
+after Ack. A stuck spawn/open is a cleanup failure subject to core/frontend
+watchdogs, not successful shutdown. Deterministic model tests cover all four
+pre-publication barriers and the post-Created race for Shutdown and EOF.
+
 ## 7. PTY/process lifecycle
 
-Use exact creack/pty v1.1.24 for opening/StartWithSize. It sets Setsid/Setctty and
-attaches stdin/stdout/stderr to the same slave; parent slave closes after Start.
+Use exact creack/pty v1.1.24 for pty.Open/Setsize; production spawn proposal is
+os.StartProcess, not exec.Cmd. Explicit Files={slave,slave,slave} and SysProcAttr
+Setsid=true, Setctty=true, Ctty=0 reproduce the library's controlling-terminal
+setup. Configure slave termios and initial size before spawning, close parent
+slave immediately on success or failure, retain master only after successful
+resource adoption. Failed steps roll back both FDs and reservation ownership.
 Shell is session leader with controlling terminal and initial process group.
 Darwin master creation uses CLOEXEC. Keep all exec streams *os.File. Inherit
 intended cwd/env; validate SHELL as absolute regular executable, fallback /bin/sh,
@@ -186,13 +226,14 @@ shell-defined. Retain TERM=xterm-256color and COLORTERM=truecolor (the current
 VTermEmulatorFactory overrides), without serializing raw env through IPC.
 Failed Start/open/initial size rolls back resources before Error.
 
-Termios needs deliberate migration qualification: current C++ creates explicit
-canonical/echo/signal flags and control characters; creack/pty uses Darwin's fresh
-slave defaults and does not install that policy. Compare stty flags/control keys
-before cutover. If defaults differ materially, use pty.Open plus configured slave,
-Setsid/Setctty and exec.Start with the same library-established setup pattern;
-configure termios through a small audited helper, not handwritten PTY opening.
-Do not silently assume Go's initial terminal mode equals accepted V0.
+Current C++ creates explicit canonical/echo/signal flags, control keys and 38400
+speeds. Fresh Darwin input/control/local flags and speed differ (output/Ctrl-C/
+erase match in the disposable comparison). Preserve the accepted explicit policy
+using a narrow audited termios helper on the library-opened slave. The R1 fixture
+sets and reads back that policy before os.StartProcess. Do not inherit outer
+terminal raw mode or silently treat fresh defaults as accepted V0 equivalence.
+This is terminal policy, not handwritten PTY allocation; qualify interactive
+control-key/job behavior again at cutover.
 
 Resize uses pty.Setsize/TIOCSWINSZ; driver supplies foreground SIGWINCH. Ctrl-C/Z
 remain encoded terminal input with line-discipline/job-control semantics, not
@@ -213,12 +254,17 @@ Wait4(ownedPID,WNOHANG), direct-PID signals and status transitions. Nobody else,
 including a SIGCHLD handler, waits this PID. EINTR retries; ECHILD/terminal wait
 error stops signalling. Only this owner reaps, so child/zombie retains PID identity
 until it does so; it never signals after reap. Process.Release after captured
-status; **no Cmd.Wait afterward or concurrently**. Use exec.Command, no
-CommandContext, WaitDelay, pipe helpers, custom stream Reader/Writer or copy
-threads. Those would introduce cleanup this reaper cannot silently bypass.
-Enforce restricted construction by source audit/tests. This is a small reaper
+status; **no Cmd or Cmd.Wait on this path**. An earlier exec.Command proposal was
+invalid: Wait4+Release leaves Cmd.ProcessState nil and GODEBUG=execwait=2 panics
+under explicit GC (independent R1 reproduction). os.StartProcess supplies no Cmd
+copier/context/finalizer contract to bypass. No concurrent Process.Wait, external
+SIGCHLD reaper, pipe helpers or background exec copiers. Enforce restricted
+construction by source audit/tests. This is a small reaper
 layer, not handwritten PTY setup. Map syscall.WaitStatus to tagged exit/signal/
-core status. Fifty synthetic cycles validate the basic policy, not real PID reuse.
+core status. Fifty-cycle fixture repeated ten times under execwait/GC/race stress
+passes with FD/goroutine baselines restored and termios readback; it cannot force
+actual PID reuse. Standard Cmd.Wait observations use their ordinary Wait path and
+are separate dependency-behavior probes.
 
 Master reads/writes are nonblocking with single reader and serial input writer.
 Use wakeable poll/select or a specifically qualified Go netpoll wrapper, never
@@ -316,7 +362,8 @@ suppress emitted process input; current blanket disconnected rejection must narr
 
 ## 10. Concurrency and backpressure
 
-Proposed v1 limits: 16 admitted sessions (UI initially two), 64 outstanding requests,
+Proposed v1 limits: 16 admitted/reserved sessions (UI initially two), 48 ordinary
+plus 33 reserved control requests as defined above,
 256 KiB raw output window/session, 4 MiB aggregate output storage, 128 KiB aggregate
 control reserve, 64 KiB input queue/session. Bound metadata/frame allocation
 overhead separately; no unbounded event/error/correlation queues. Create accepts
@@ -326,6 +373,13 @@ memory is separate from IPC budget; extreme dimensions/history can still be cost
 Keep frontend limits explicit rather than equating bounded IPC with total UI memory.
 
 OutputCredit returns raw bytes only after emulator consumes/releases payload.
+Frontend coalesces at most one outstanding update/session, flushing consumed
+credit within 100 ms even for a quiet stream; it never waits for Input/Resize Ack.
+Decoder validates/applies Credit and queues its Ack without acquiring PTY command
+worker locks. Valid Credit remains accepted in Draining/Closing/Exited while the
+registry exists. After registry removal, late Credit gets UNKNOWN_SESSION (single
+correlated completion, no accounting change); client treats that as harmless only
+for an already-closed local endpoint. It retains control bookkeeping until reply.
 Backend reserves credit at successful read admission, not again at socket send.
 Read size ≤available credit/capacity. Account queued/in-flight/unconsumed bytes;
 return cannot exceed sent-but-uncredited bytes. Reject double/overflow credits.
@@ -334,9 +388,11 @@ of shared IPC continues controls/other sessions; it does not wait under emulator
 locks. Advertised window must match frontend queue capacity including in-flight
 chunks. Credit overhead excludes sequence/header but those allocations are bounded.
 
-Writer serves output round-robin with bounded chunks. Control reserve permits
-Close/Shutdown; it never overtakes preceding output/Created/Exited for same session.
-No write progress for 2 seconds, or pending observed output without returned credit
+Writer serves output round-robin with bounded chunks. Control byte **and request**
+reserves permit credit/cancellation. Command/Error/Credit Acks may use a bounded
+priority lane; Created must precede any session event, and Exited/Closed cannot
+overtake preceding output. Acknowledging credit does not charge credit again.
+No write progress for 2 seconds, or unconsumed sent/queued output without credit progress
 for 2 seconds, fails connection and cleans all sessions. Never drop observed bytes
 then fabricate Exited. Cleanup bypasses delivery/credit waits on connection loss.
 
@@ -365,8 +421,20 @@ budgets are proposals requiring implementation stress qualification.
 Core crash closes masters via OS descriptor cleanup/hangup; no universal descendant
 cleanup promise. No automatic restart/reconnect or silent respawn. Frontend similarly
 serializes core-child signalling/reaping and never signals an already-reaped PID.
-Normal shutdown watchdog is 2 seconds; a still-live core remains owned by a reaper
-instead of declared clean. Outer terminal restoration remains C++/Turbo Vision;
+Frontend starts a 2-second deadline when sending Hello or confirmed Shutdown.
+If expected completion/core exit is absent, it closes its IPC endpoint, cancels
+and joins local connection/presentation waits (100 ms userspace target), reports
+forced backend loss, then sends SIGTERM only to its still-owned/unreaped core.
+After 250 ms without reap, send SIGKILL once (also handles a SIGSTOP core). Poll
+waitpid(WNOHANG) for up to a further second, all signals and waits on one lifecycle
+owner. Reaped core is never signalled. Failure to reap after escalation is reported
+as OS-level cleanup uncertainty, with ownership retained in a reaper; it cannot
+prevent local terminal restoration. After local worker cancellation, detach UI
+and restore outer terminal regardless of core cleanup outcome. Normal core Ack
+without exit still expires at the same deadline. Forced core death proves nothing
+about terminal-shell/descendant cleanup, and is shown distinctly from graceful
+Shutdown success. The same policy handles handshake stalls without adding an idle
+heartbeat/reconnect feature. Outer terminal restoration remains C++/Turbo Vision;
 SIGKILL restoration is not guaranteed. Distinguish loss, exit, parser and cleanup
 errors without exposing terminal data.
 

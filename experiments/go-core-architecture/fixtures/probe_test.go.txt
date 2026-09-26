@@ -6,6 +6,7 @@ import (
  "fmt"
  "os"
  "os/exec"
+ "runtime"
  "syscall"
  "testing"
  "time"
@@ -73,23 +74,30 @@ func TestWaitDoesNotOwnPTYEOF(t *testing.T){
 }
 func TestSerializedReaper(t *testing.T){
  // Prototype the macOS safe ownership alternative: only this goroutine reaps/signals.
+ runtime.GC();baseWorkers:=runtime.NumGoroutine();baseFDs,e:=os.ReadDir("/dev/fd");if e!=nil{t.Fatal(e)}
  for i:=0;i<50;i++{
- c:=exec.Command("/bin/sh","-c","stty -echo; printf READY; read x; exit 17")
- c.Env=[]string{"PATH=/usr/bin:/bin","HOME=/nonexistent"}
- f,e:=pty.StartWithSize(c,&pty.Winsize{Rows:24,Cols:80});if e!=nil{t.Fatal(e)}
+ f,slave,e:=pty.Open();if e!=nil{t.Fatal(e)}
+ if e=pty.Setsize(f,&pty.Winsize{Rows:24,Cols:80});e!=nil{slave.Close();f.Close();t.Fatal(e)}
+ if e=configureV0Termios(slave);e!=nil{slave.Close();f.Close();t.Fatal(e)}
+ proc,e:=os.StartProcess("/bin/sh",[]string{"/bin/sh","-c","stty -echo; printf READY; read x; exit 17"},&os.ProcAttr{Env:[]string{"PATH=/usr/bin:/bin","HOME=/nonexistent"},Files:[]*os.File{slave,slave,slave},Sys:&syscall.SysProcAttr{Setsid:true,Setctty:true,Ctty:0}})
+ slave.Close();if e!=nil{f.Close();t.Fatal(e)}
  fd:=int(f.Fd());syscall.SetNonblock(fd,true);readUntil(t,fd,[]byte("READY"))
  if i%2==0 {syscall.Write(fd,[]byte("done\n"))} else {f.Close()}
  var status syscall.WaitStatus;reaped:=false;signalled:=false;begun:=time.Now()
  for time.Since(begun)<time.Second {
- n,e:=syscall.Wait4(c.Process.Pid,&status,syscall.WNOHANG,nil)
- if n==c.Process.Pid {reaped=true;break};if e!=nil&&e!=syscall.EINTR{t.Fatal(e)}
- if !signalled && time.Since(begun)>250*time.Millisecond {if e=syscall.Kill(c.Process.Pid,syscall.SIGKILL);e!=nil&&e!=syscall.ESRCH{t.Fatal(e)};signalled=true}
+ n,e:=syscall.Wait4(proc.Pid,&status,syscall.WNOHANG,nil)
+ if n==proc.Pid {reaped=true;break};if e!=nil&&e!=syscall.EINTR{t.Fatal(e)}
+ if !signalled && time.Since(begun)>250*time.Millisecond {if e=syscall.Kill(proc.Pid,syscall.SIGKILL);e!=nil&&e!=syscall.ESRCH{t.Fatal(e)};signalled=true}
  time.Sleep(time.Millisecond)
  }
- if !reaped{t.Fatal("serialized reaper bound")};f.Close();c.Process.Release()
+ if !reaped{t.Fatal("serialized reaper bound")};f.Close();proc.Release()
+ var second syscall.WaitStatus;if _,e=syscall.Wait4(proc.Pid,&second,syscall.WNOHANG,nil);e!=syscall.ECHILD{t.Fatal("direct child not reaped")}
  if i%2==0 && (!status.Exited()||status.ExitStatus()!=17){t.Fatal("natural status")}
+ runtime.GC()
  }
- t.Log("50 natural/close cycles; one Wait4/signalling owner; exact natural exit17; Process.Release after reaping")
+ fds,e:=os.ReadDir("/dev/fd");if e!=nil||len(fds)!=len(baseFDs){t.Fatal("FD baseline")}
+ if runtime.NumGoroutine()!=baseWorkers{t.Fatal("goroutine baseline")}
+ t.Log("50 natural/close cycles; pty.Open/os.StartProcess/V0 termios; exact natural exit17; Wait4 then Release; FD/goroutine baselines restored; explicit GC")
 }
 func TestRawBinaryAndOrdering(t *testing.T){
  for i:=0;i<20;i++{

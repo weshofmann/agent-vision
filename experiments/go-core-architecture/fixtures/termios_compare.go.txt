@@ -1,0 +1,5 @@
+// Disposable policy comparison; no host identifiers or terminal payloads.
+package main
+import("fmt";"syscall";"unsafe";"github.com/creack/pty")
+func main(){m,s,e:=pty.Open();if e!=nil{panic(e)};defer m.Close();defer s.Close();var t syscall.Termios;_,_,x:=syscall.Syscall(syscall.SYS_IOCTL,s.Fd(),syscall.TIOCGETA,uintptr(unsafe.Pointer(&t)));if x!=0{panic(x)}
+fmt.Printf("fresh_darwin_vs_v0 iflag_equal=%t oflag_equal=%t cflag_equal=%t lflag_equal=%t speed38400=%t ctrlC_equal=%t erase_equal=%t\n",t.Iflag==uint64(syscall.ICRNL|syscall.IXON|syscall.IUTF8),t.Oflag==uint64(syscall.OPOST|syscall.ONLCR),t.Cflag==uint64(syscall.CS8|syscall.CREAD),t.Lflag==uint64(syscall.ISIG|syscall.ICANON|syscall.IEXTEN|syscall.ECHO|syscall.ECHOE|syscall.ECHOK|syscall.ECHOCTL|syscall.ECHOKE),t.Ispeed==syscall.B38400&&t.Ospeed==syscall.B38400,t.Cc[syscall.VINTR]==3,t.Cc[syscall.VERASE]==127)}
