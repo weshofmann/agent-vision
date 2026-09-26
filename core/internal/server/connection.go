@@ -34,7 +34,7 @@ func Serve(ctx context.Context, c net.Conn, m *session.Manager, p policy.Policy)
 		defer cancel()
 		return errors.Join(err, m.Shutdown(cleanup))
 	}
-	x := &connection{conn: c, raw: raw, manager: m, scheduler: s, policy: p, changed: make(chan struct{})}
+	x := &connection{conn: c, raw: raw, manager: m, scheduler: s, policy: p}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
 	read := make(chan error, 1)
@@ -96,17 +96,18 @@ type connection struct {
 	mu          sync.Mutex
 	accepted    [acceptedSlots]correlation
 	rejected    [rejectionSlots]protocol.RequestID
-	changed     chan struct{}
 	shutdown    protocol.RequestID
 	fatal       protocol.RequestID
 	finished    bool
 	established bool
 }
 
-func (x *connection) notify() { close(x.changed); x.changed = make(chan struct{}) }
 func (x *connection) reserve(f protocol.Frame) protocol.ErrorCode {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	return x.reserveLocked(f)
+}
+func (x *connection) reserveLocked(f protocol.Frame) protocol.ErrorCode {
 	if x.finished {
 		return protocol.ErrorState
 	}
@@ -148,46 +149,62 @@ func (x *connection) reserve(f protocol.Frame) protocol.ErrorCode {
 	}
 	return protocol.ErrorLimit
 }
-func (x *connection) retire(req protocol.RequestID) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	x.retireLocked(req)
-}
 func (x *connection) retireLocked(req protocol.RequestID) {
 	for i, a := range x.accepted {
 		if a.request == req {
 			x.accepted[i] = correlation{}
-			x.notify()
 			return
 		}
 	}
 	for i, r := range x.rejected {
 		if r == req {
 			x.rejected[i] = 0
-			x.notify()
 			return
 		}
 	}
 }
-func (x *connection) reject(f protocol.Frame, code protocol.ErrorCode, fatal bool) error {
-	x.mu.Lock()
-	slot := -1
+func (x *connection) registerRejectionLocked(req protocol.RequestID) error {
+	if req == 0 {
+		return protocol.ErrInvalid
+	}
 	for i, r := range x.rejected {
 		if r == 0 {
-			slot = i
-			break
+			x.rejected[i] = req
+			return nil
 		}
 	}
-	if slot < 0 {
-		x.mu.Unlock()
-		return ErrContact
-	}
-	x.rejected[slot] = f.Header.Request
+	return ErrContact
+}
+func (x *connection) enqueueError(f protocol.Frame, code protocol.ErrorCode) error {
+	return x.scheduler.Enqueue(session.Event{Request: f.Header.Request, Session: f.Header.Session, Message: protocol.ErrorMessage{Code: code, Message: "request rejected"}})
+}
+func (x *connection) reject(f protocol.Frame, code protocol.ErrorCode, fatal bool) error {
+	x.mu.Lock()
+	// Invalid reused correlation cannot identify a fresh obligation. Fail contact
+	// without making a rejection Error retire the earlier accepted request.
 	if fatal {
+		for _, a := range x.accepted {
+			if a.request == f.Header.Request {
+				x.mu.Unlock()
+				return protocol.ErrInvalid
+			}
+		}
+		for _, r := range x.rejected {
+			if r == f.Header.Request {
+				x.mu.Unlock()
+				return protocol.ErrInvalid
+			}
+		}
+	}
+	err := x.registerRejectionLocked(f.Header.Request)
+	if err == nil && fatal {
 		x.fatal = f.Header.Request
 	}
 	x.mu.Unlock()
-	return x.scheduler.Enqueue(session.Event{Request: f.Header.Request, Session: f.Header.Session, Message: protocol.ErrorMessage{Code: code, Message: "request rejected"}})
+	if err != nil {
+		return err
+	}
+	return x.enqueueError(f, code)
 }
 func (x *connection) decode(ctx context.Context) error {
 	// Registration is completed by Serve before workers can be joined.
@@ -252,22 +269,29 @@ func (x *connection) decode(ctx context.Context) error {
 		if f.Header.Type == protocol.TypeHello {
 			return x.fatalError(ctx, f, protocol.ErrorProtocol)
 		}
-		if code := x.reserve(f); code != 0 {
-			if e = x.reject(f, code, false); e != nil {
+		code, admissionErr := x.reserveForDecode(f)
+		if errors.Is(admissionErr, errSealed) {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if admissionErr != nil {
+			return admissionErr
+		}
+		if code != 0 {
+			if e = x.enqueueError(f, code); e != nil {
 				return e
 			}
 			continue
 		}
 		e = x.manager.Admit(f)
 		if e != nil {
-			// Convert the accepted reservation into a bounded rejection record; neither
-			// record owns a body or any PTY work.
-			x.retire(f.Header.Request)
+			// Keep the accepted connection correlation until its terminal Error
+			// is fully delivered. There is no release/rejection-registration gap.
 			var a *session.AdmissionError
 			if !errors.As(e, &a) {
 				return e
 			}
-			if e = x.reject(f, a.Code, false); e != nil {
+			if e = x.enqueueError(f, a.Code); e != nil {
 				return e
 			}
 		} else if f.Header.Type == protocol.TypeShutdown {
@@ -297,12 +321,31 @@ func (x *connection) fatalError(ctx context.Context, f protocol.Frame, code prot
 func (x *connection) othersPending(req protocol.RequestID) bool {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	return x.pendingLocked(req)
+}
+func (x *connection) pendingLocked(req protocol.RequestID) bool {
 	for _, a := range x.accepted {
 		if a.request != 0 && a.request != req {
 			return true
 		}
 	}
+	for _, r := range x.rejected {
+		if r != 0 {
+			return true
+		}
+	}
 	return false
+}
+
+// sealShutdown freezes admission atomically with the accepted-response barrier.
+func (x *connection) sealShutdown(req protocol.RequestID) bool {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.pendingLocked(req) {
+		return false
+	}
+	x.finished = true
+	return true
 }
 func (x *connection) write(ctx context.Context) error {
 	defer x.workers.Done()
@@ -322,7 +365,7 @@ func (x *connection) write(ctx context.Context) error {
 		isShutdown := false
 		if a, ok := e.Message.(protocol.Ack); ok && a.CompletedType == protocol.TypeShutdown {
 			isShutdown = true
-			if x.othersPending(e.Request) {
+			if !x.sealShutdown(e.Request) {
 				copyEvent := e
 				held = &copyEvent
 				x.scheduler.Complete(e)
@@ -333,6 +376,7 @@ func (x *connection) write(ctx context.Context) error {
 		if ticket != nil {
 			if err = ticket.BeginWrite(); err != nil {
 				x.scheduler.Complete(e)
+				e = session.Event{}
 				ticket.FailWrite(err)
 				return err
 			}
@@ -393,4 +437,22 @@ func (x *connection) write(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// reserveForDecode atomically owns either an accepted correlation or the
+// bounded rejection reply before Shutdown can freeze admission. Queue/manager
+// work follows outside the mutex; no request body is retained here.
+var errSealed = errors.New("connection shutdown delivery sealed")
+
+func (x *connection) reserveForDecode(f protocol.Frame) (protocol.ErrorCode, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.finished {
+		return 0, errSealed
+	}
+	code := x.reserveLocked(f)
+	if code != 0 {
+		return code, x.registerRejectionLocked(f.Header.Request)
+	}
+	return 0, nil
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -285,4 +286,41 @@ func unixPair(t *testing.T) (net.Conn, net.Conn) {
 		t.Fatal(e)
 	}
 	return a, b
+}
+
+type beforeGate struct {
+	syscall.RawConn
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (g *beforeGate) Write(f func(uintptr) bool) error {
+	g.once.Do(func() { close(g.entered); <-g.release })
+	return g.RawConn.Write(f)
+}
+func TestRejectedReplyExhaustionFailsContact(t *testing.T) {
+	a, b := unixPair(t)
+	defer b.Close()
+	b.SetDeadline(time.Now().Add(3 * time.Second))
+	raw, _ := a.(syscall.Conn).SyscallConn()
+	gate := &beforeGate{RawConn: raw, entered: make(chan struct{}), release: make(chan struct{})}
+	p := policy.Default()
+	s := NewScheduler()
+	m := session.NewManager(p, spawnFunc(noSpawn), s)
+	done := make(chan error, 1)
+	go func() { done <- Serve(context.Background(), rawGateConn{a, gate}, m, p) }()
+	send(t, b, protocol.Hello{MinMajor: 1, MaxMajor: 1}, 1, 0)
+	<-gate.entered
+	for i := 2; i <= 178; i++ {
+		send(t, b, protocol.ResizeSession{Rows: 24, Cols: 80}, protocol.RequestID(i), 7)
+	}
+	select {
+	case <-m.Done():
+	case <-time.After(time.Second):
+		t.Fatal("rejection exhaustion did not fail contact/clean")
+	}
+	close(gate.release)
+	if e := <-done; e == nil {
+		t.Fatal("exhausted rejection metadata claims success")
+	}
 }

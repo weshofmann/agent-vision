@@ -25,12 +25,26 @@ def resources(pid):
     descriptors = ctypes.create_string_buffer(size + 128)
     actual = lib.proc_pidinfo(pid, 1, 0, descriptors, len(descriptors))
     assert actual > 0 and actual % 8 == 0
+    return actual // 8, struct.unpack_from('i', task.raw, 84)[0], len(children(pid))
+
+
+def children(pid):
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
     lib.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
     lib.proc_listchildpids.restype = ctypes.c_int
-    children = ctypes.create_string_buffer(128)
-    child_bytes = lib.proc_listchildpids(pid, children, len(children))
-    assert child_bytes >= 0
-    return actual // 8, struct.unpack_from('i', task.raw, 84)[0], child_bytes
+    storage = ctypes.create_string_buffer(128)
+    count = lib.proc_listchildpids(pid, storage, len(storage))
+    assert 0 <= count <= 32
+    return struct.unpack_from('=' + 'i' * count, storage.raw) if count else ()
+
+
+def absent(pid):
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    lib.proc_pidinfo.restype = ctypes.c_int
+    bsd = ctypes.create_string_buffer(256)
+    return lib.proc_pidinfo(pid, 3, 0, bsd, len(bsd)) == 0
+
 
 
 class Client:
@@ -189,7 +203,10 @@ def main():
         live = client.create()
         client.input(live, b"printf 'LIVE_OK\\n'\n")
         client.marker(live, b'LIVE_OK\r\n')
+        owned = children(client.pid)
+        assert len(owned) == 1
         client.shutdown()
+        assert all(absent(pid) for pid in owned), 'Shutdown left observed direct child present'
     finally:
         client.cleanup()
     # A native exec fixture inventories descriptors above stderr and checks the
@@ -216,7 +233,28 @@ def main():
             client.shutdown()
         finally:
             client.cleanup()
-    print('PASS: literal golden, input/resize, arbitrary raw bytes, tail/exit7, SIGTERM, Close/Shutdown, FD baseline, native exec FD/tty inventory')
+    for failure in ('endpoint-eof', 'core-sigterm', 'malformed'):
+        client = Client(binary)
+        try:
+            session = client.create()
+            client.input(session, b"printf 'OWNED_OK\\n'\n")
+            client.marker(session, b'OWNED_OK\r\n')
+            owned = children(client.pid)
+            assert len(owned) == 1
+            if failure == 'core-sigterm':
+                os.kill(client.pid, signal.SIGTERM)
+            elif failure == 'malformed':
+                client.socket.sendall(HEADER.pack(b'AVCP', 1, 8, 1, 0, 0, client.request + 1, 0))
+            else:
+                client.socket.shutdown(socket.SHUT_WR)
+            while client.socket.recv(65536):
+                pass
+            status = client.cleanup()
+            assert (os.waitstatus_to_exitcode(status) == 0) == (failure == 'endpoint-eof'), (failure, os.waitstatus_to_exitcode(status))
+            assert all(absent(pid) for pid in owned), 'failure cleanup left observed direct child present'
+        finally:
+            client.cleanup()
+    print('PASS: literal golden, input/resize, arbitrary raw bytes, tail/exit7, SIGTERM, Close/Shutdown, FD baseline, native exec FD/tty inventory, endpoint/core-signal/malformed cleanup')
 
 if __name__ == '__main__':
     main()

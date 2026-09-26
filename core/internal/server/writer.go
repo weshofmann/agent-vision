@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net"
+	"os"
 	"syscall"
 	"time"
 
@@ -49,12 +50,19 @@ type socketWriter struct {
 	request    protocol.RequestID
 	remaining  int
 	attempt    func(int, []byte) (int, error)
+	deadline   time.Time
 }
 
 func (w *socketWriter) Write(b []byte) (int, error) {
 	x := w.connection
 	for {
-		if err := x.conn.SetWriteDeadline(time.Now().Add(x.policy.WriteTimeout)); err != nil {
+		if w.deadline.IsZero() {
+			w.deadline = time.Now().Add(x.policy.WriteTimeout)
+		}
+		if !time.Now().Before(w.deadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
+		if err := x.conn.SetWriteDeadline(w.deadline); err != nil {
 			return 0, err
 		}
 		var n int
@@ -70,6 +78,7 @@ func (w *socketWriter) Write(b []byte) (int, error) {
 				n = 0
 			}
 			if n > 0 {
+				w.deadline = time.Now().Add(x.policy.WriteTimeout)
 				w.remaining -= n
 				if attemptErr == nil && w.remaining == 0 && w.request != 0 {
 					x.retireLocked(w.request)
