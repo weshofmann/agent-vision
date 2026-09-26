@@ -45,6 +45,9 @@ foreach(notice IN ITEMS tvterm.COPYRIGHT tvision.COPYRIGHT libvterm.LICENSE)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
         "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
 endforeach()
+add_executable(agentvision src/main.cpp src/app.cpp src/window.cpp)
+target_link_libraries(agentvision PRIVATE tvterm-core)
+target_compile_options(agentvision PRIVATE -Wall -Wextra)
 include(CTest)
 if(BUILD_TESTING)
     add_executable(lifecycle_test tests/lifecycle.cpp)
@@ -59,4 +62,11 @@ if(BUILD_TESTING)
         set_tests_properties(lifecycle_${case} PROPERTIES TIMEOUT 20)
     endforeach()
     set_tests_properties(lifecycle PROPERTIES TIMEOUT 20)
+    if(APPLE)
+        add_test(NAME desktop_pty COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_pty.py" $<TARGET_FILE:agentvision>
+            --output "${CMAKE_CURRENT_BINARY_DIR}/desktop-evidence")
+        set_tests_properties(desktop_pty PROPERTIES TIMEOUT 60
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
+    endif()
 endif()
