@@ -34,3 +34,13 @@
   model verification.
 - Review boundary: proposed design only; Draft PR remains draft. No merge to
   main, retained application or next milestone without operator authorization.
+
+- Independent read-only design review at `964cb8e` posted on PR #2; requested
+  Astra/medium selector accepted, effective backend model/effort unavailable.
+  Two probe-only P2 findings were addressed in `bb917b3`: conservative child-state
+  evidence and finalization on I/O failure. Five focused checks plus a normal
+  real-PTY regression passed at that exact SHA. Fresh review remains the boundary.
+- After detecting that the unborn primary lacked a physical ignore file, added
+  only `/.codex/worktrees/` to primary `.git/info/exclude`; primary default status
+  is now clean and default `check-ignore` confirms the assigned path. No primary
+  tracked content was edited or checked out.

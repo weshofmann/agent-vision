@@ -65,3 +65,22 @@ The reconstruction showed doubled OSC 0 titles. The raw ANSI output contains
 those titles as well; pyte rendering alone does not explain that anomaly. No
 upstream fix was attempted. Physical mouse/keyboard, full-screen apps, outer
 resize, signals, live-child close and descendants were not qualified.
+
+## Review fixes and final regression
+
+[Review-fix evidence](review-fixes/) is a separate archive tested at
+**`bb917b31d22d9afc6203618a04dba11fa7c52898`**. The unmodified binary hash matches
+the original archive. Reconfigured explicitly with both system-dependency options
+OFF and rebuilt successfully. Five focused checks pass, covering absent/Z/S/R/T
+classification and evidence-write, vanished-group and bounded-reap failures.
+The real-PTY driver and revised verifier exited 0: A PID 89178, B PID 89186,
+B absent at the post-close sample, core feasibility passed, V0 not fully tested.
+Original and revised raw interaction evidence remain distinct; no earlier
+intermittent failure is dismissed. Copy hashes and gzip round-trip were verified.
+
+Verification accounting: `git diff --check origin/main HEAD --
+":!docs/v0/evidence/**"` passes for code and report/workflow documentation.
+The full-range check without that exclusion exits 2 because captured configure
+logs and fixed-width screen rows contain trailing spaces. Those evidence bytes
+are intentionally preserved, not whitespace-normalized. The earlier plain
+`git diff --check` checked only the unstaged diff; it was not a full PR check.

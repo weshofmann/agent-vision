@@ -1,0 +1,545 @@
+[
+  {
+    "snapshot": "01-start"
+  },
+  {
+    "input": "label=A; PS1='A> '; printf '\\033]0;Shell A\\007'; printf 'SESSION %s PID %s\\n' \"$label\" \"$$\"; tty; stty size\r"
+  },
+  {
+    "snapshot": "02-shell-a"
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "n"
+  },
+  {
+    "input": "label=B; PS1='B> '; printf '\\033]0;Shell B\\007'; printf 'SESSION %s PID %s\\n' \"$label\" \"$$\"; tty; stty size\r"
+  },
+  {
+    "snapshot": "03-shell-b"
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "r"
+  },
+  {
+    "snapshot": "04-drag-mode"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\r"
+  },
+  {
+    "input": "printf 'FOCUS %s PID %s SIZE ' \"$label\" \"$$\"; stty size\r"
+  },
+  {
+    "snapshot": "05-b-resized-moved"
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "\t"
+  },
+  {
+    "input": "printf 'FOCUS %s PID %s SIZE ' \"$label\" \"$$\"; stty size\r"
+  },
+  {
+    "snapshot": "06-focus-a"
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "r"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2D"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[1;2A"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[C"
+  },
+  {
+    "input": "\u001b[B"
+  },
+  {
+    "input": "\r"
+  },
+  {
+    "input": "printf 'FOCUS %s SIZE ' \"$label\"; stty size\r"
+  },
+  {
+    "snapshot": "07-a-resized-overlap"
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "\t"
+  },
+  {
+    "input": "printf 'FOCUS %s SIZE ' \"$label\"; stty size\r"
+  },
+  {
+    "snapshot": "08-focus-b-overlap"
+  },
+  {
+    "input": "exit 7\r"
+  },
+  {
+    "snapshot": "09-b-exit"
+  },
+  {
+    "input": " "
+  },
+  {
+    "input": "printf 'SURVIVOR %s\\n' \"$label\"\r"
+  },
+  {
+    "snapshot": "10-a-survives"
+  },
+  {
+    "owned_shell_processes_after_b_close": [
+      "89178 89177 Ss+"
+    ]
+  },
+  {
+    "input": "exit 0\r"
+  },
+  {
+    "snapshot": "11-a-exit"
+  },
+  {
+    "input": " "
+  },
+  {
+    "input": "\u0002"
+  },
+  {
+    "input": "q"
+  },
+  {
+    "snapshot": "12-quit-menu"
+  },
+  {
+    "input": "outer-check\n"
+  },
+  {
+    "app_wait_status": 0,
+    "outer_termios_restored": false,
+    "before_termios": "[11010, 3, 19200, 1483, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+    "after_termios": "[11010, 3, 19200, 536872395, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+    "outer_input_recovered": true,
+    "outer_input_hex": "6f757465722d636865636b0a",
+    "after_input_termios": "[11010, 3, 19200, 1483, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+    "outer_termios_restored_after_input": true,
+    "supervisor_wait_status": 0,
+    "alternate_screen_enter": true,
+    "alternate_screen_leave": true
+  }
+]
