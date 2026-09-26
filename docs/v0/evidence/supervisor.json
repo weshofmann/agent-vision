@@ -1,0 +1,10 @@
+{
+  "app_wait_status": 0,
+  "outer_termios_restored": false,
+  "before_termios": "[11010, 3, 19200, 1483, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+  "after_termios": "[11010, 3, 19200, 536872395, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+  "outer_input_recovered": true,
+  "outer_input_hex": "6f757465722d636865636b0a",
+  "after_input_termios": "[11010, 3, 19200, 1483, 9600, 9600, [b'\\x04', b'\\xff', b'\\xff', b'\\x7f', b'\\x17', b'\\x15', b'\\x12', b'\\xff', b'\\x03', b'\\x1c', b'\\x1a', b'\\x19', b'\\x11', b'\\x13', b'\\x16', b'\\x0f', b'\\x01', b'\\x00', b'\\x14', b'\\xff']]",
+  "outer_termios_restored_after_input": true
+}

@@ -1,2 +1,4 @@
 # Keep task worktrees out of version control without hiding Codex configuration.
 /.codex/worktrees/
+# Disposable V0 upstream checkouts, tools and builds (not retained product code).
+/.probe/

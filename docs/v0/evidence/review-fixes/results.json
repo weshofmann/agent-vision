@@ -1,0 +1,13 @@
+{
+  "core_feasibility_checks": "passed",
+  "shell_a_pid": "89178",
+  "shell_b_pid": "89186",
+  "closed_b_absent_at_sample": true,
+  "closed_b_states_at_sample": [],
+  "owned_shell_metadata": [
+    "89178 89177 Ss+"
+  ],
+  "immediate_termios_equal": false,
+  "termios_equal_after_input": true,
+  "v0_qualification": "not fully tested"
+}

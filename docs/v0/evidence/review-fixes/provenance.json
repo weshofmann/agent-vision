@@ -1,0 +1,36 @@
+{
+  "behavior_and_focused_checks_tested_sha": "bb917b31d22d9afc6203618a04dba11fa7c52898",
+  "observed_on": "2026-09-26",
+  "source_directory": "/Users/devel/workspace/agent-vision/.codex/worktrees/v0-feasibility/.probe/review-fixes-interaction",
+  "binary_sha256": "0e3026aa3d2afd3b19ba69b7151ee569c47d2509f0f887c9b3b6490fd7962188",
+  "code_sha256": {
+    "interactive_probe.py": "22605ead83bcf662dbe904df14ace590c65c1a4e491a99b77723f11f84cf87ac",
+    "verify_probe.py": "67acce9cfe816cc7a6ff9a5b84366ea15f130fb1ca03f8c501f2d8be1fb53399",
+    "probe_cleanup.py": "93d5bc11b484d20b57e28917af6e7c05409729a0cc5706084730636de212fe5f",
+    "test_probe_checks.py": "89668f03787f6a1c24ba035c9bf3b62d81d63d60ba0df980baaf7a77fbc8df00",
+    "build_probe.sh": "99060f18598792260efd0be7b957f85edb0795c6dcd1801e5274f94a75d51d3e"
+  },
+  "files_sha256": {
+    "08-focus-b-overlap.txt": "6329a7e8fd37739fe81ce7d992c6aead22c8b1e38e3524b82d1ea8af7ecf30a7",
+    "04-drag-mode.txt": "4171740b353ea12de991b0e7980111ad5d8152e21b74eb3022dad45cbe62ff03",
+    "03-shell-b.txt": "c3db9af76855792beb18d8e4635d0cae56e9a5c62dbe290137c900dbd8215a99",
+    "07-a-resized-overlap.txt": "2787a2018c416e210e3162051c64afdc5a39c0759f91bdced8e50eca0534c94f",
+    "05-b-resized-moved.txt": "f0f035e4e0b8876a47e309fe2c7c57408ce2b0c83a2b751e5a1e3b4da6b72c05",
+    "06-focus-a.txt": "3898154a7c1658f1044ca253141f87e9bf58ad5ba78b1e728fb4cc4df4e48025",
+    "02-shell-a.txt": "7d86ff0845c104e9ca693bd72525ad5e3c4653a822af88d5965eb27b5d1949ab",
+    "09-b-exit.txt": "a1ed54452fad0e8c454bf4919142e7f6face933f77be4cf3d7bb579de1051a84",
+    "10-a-survives.txt": "737bf98f675a60668409063da73f5a3e32a60672a0544a1bff1cf55f5024039f",
+    "12-quit-menu.txt": "d195eb10898877b323ff9e3f28895366f8c65b82024b579601434e570dea8e0f",
+    "11-a-exit.txt": "c00c43133448ae6be9cbe8257634d5f6fcdd8d23077d4ffadeb40b8b9aabc938",
+    "01-start.txt": "f6747f0a1bcc41a6b9a9bfeb5c0c1ba8d637fdc4e7f932bf9bdadb72e7ef856d",
+    "steps.json": "ae26b1d13ad6d4997074305f90811309bd9cc86152a288253e1eea84fdd80ce9",
+    "supervisor.json": "18c3bdce12f1385e23430506c1d30bd9ef5c88bd186a5e88573fb5d59455c4a5",
+    "results.json": "674eaa483864be8d3ec8bea90342af36a6af6bd047eba4bae4902605e9d4ba13",
+    "focused-checks.log": "0c7cd2251beb224fe570b0d2f5cce773ed7dd0167006e9b17e309566aaf44833",
+    "configure.log": "c6a5a0233891f37593a5444d8520e6dcf53ec6580c679e8e5a816b578a12bd35",
+    "build.log": "ce9e3a0d6d3f579d6e48f76abe6e18cba758252c3f0e91debe485953af9bf1ec",
+    "outer-output.ansi.gz": "6b5762eef9000b1a4641757f4a0b2b405594d888e5c74433d5697d232261b5f2",
+    "outer-output.ansi (decompressed)": "2a3c6413ae3ac1026363a4e8b7c9276ba04b51e02f95cfbaf417753700581cdd"
+  },
+  "archive_verified": "each copy byte-identical; gzip round-trip matches raw ANSI; build and focused-check logs copied from reproducible /private/tmp intermediates"
+}
