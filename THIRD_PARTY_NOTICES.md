@@ -16,3 +16,16 @@ Fetched sources retain their original notices; checked-in copies are byte-identi
 to the pinned originals and copied to `build/licenses` beside the executable.
 The platform ncurses, libutil and pthread libraries are linked through upstream's
 existing build discovery. Consult their platform-distribution notices as well.
+
+The opt-in independent Go core additionally uses:
+
+| Component | Qualified revision | Retained notice |
+| --- | --- | --- |
+| creack/pty | `v1.1.24` (checksums in `core/go.sum`) | `third_party/notices/creack-pty.LICENSE` (MIT, Keith Rarick) |
+| Go runtime/standard library | `go1.27.0`, Darwin arm64 | `third_party/notices/Go.LICENSE`, `Go.PATENTS` (Go Authors) |
+
+The Go standard-library dependency closure includes its vendored
+`golang.org/x/net/dns/dnsmessage`; the qualified distribution's complete x/net
+LICENSE and PATENTS are byte-identical to the retained Go notices. The core has
+no additional module dependencies. CMake copies these complete notices only for
+the opt-in build; it does not imply redistribution clearance for AgentVision.

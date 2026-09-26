@@ -118,6 +118,12 @@ func NewManager(p policy.Policy, s Spawner, sink Sink) *Manager {
 	}
 	return m
 }
+
+// DeliverySink exposes the immutable construction-time sink for connection setup.
+func (m *Manager) DeliverySink() Sink { return m.sink }
+
+// ContactUsable distinguishes local completion from asynchronous contact loss.
+func (m *Manager) ContactUsable() bool   { m.mu.Lock(); defer m.mu.Unlock(); return m.usable }
 func (m *Manager) Epoch() [16]byte       { return m.epoch }
 func (m *Manager) Done() <-chan struct{} { return m.done }
 func reject(c protocol.ErrorCode) error  { return &AdmissionError{Code: c} }

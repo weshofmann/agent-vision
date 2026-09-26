@@ -227,3 +227,10 @@ func TestOutputRetainedDescriptorCapacity(t *testing.T) {
 		t.Fatal("Close retained descriptor allocation")
 	}
 }
+
+func TestHandshakeScheduler(t *testing.T) {
+	s := NewScheduler()
+	if err := s.Enqueue(session.Event{Request: 1, Message: protocol.HelloAck{SelectedMajor: 1, MaxPayload: 65536, Epoch: [16]byte{1}}}); err != nil {
+		t.Fatalf("structurally valid handshake rejected: %v", err)
+	}
+}

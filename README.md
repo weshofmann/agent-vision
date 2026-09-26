@@ -70,3 +70,37 @@ summaries belong in public evidence. Read the [slice report](docs/v0/terminal-de
 for observed results and remaining qualification gaps. Full-screen/SIGWINCH,
 outer-terminal resize, abnormal-signal restoration, Unicode/load and broader
 platform support are outside this slice.
+
+## Independent Go core (PR1 opt-in)
+
+The default desktop still owns its local C++ sessions. `AGENTVISION_BUILD_CORE`
+is OFF by default. Enabling it builds a sibling `agentvision-core` for independent
+protocol qualification; the desktop does not launch or connect to that binary.
+The core is qualified only on Darwin arm64 with exactly Go 1.27.0.
+
+```sh
+.probe/tools/cmake/data/bin/cmake -S . -B build-core \
+  -DAGENTVISION_BUILD_CORE=ON \
+  -DAGENTVISION_GO_EXECUTABLE="$(mise where go@1.27.0)/bin/go" \
+  -DCMAKE_BUILD_TYPE=Debug
+.probe/tools/cmake/data/bin/cmake --build build-core --parallel 4
+.probe/tools/cmake/data/bin/ctest --test-dir build-core --output-on-failure
+python3 tests/core_client.py build-core/agentvision-core
+```
+
+Supply an absolute Go executable explicitly; CMake rejects a missing, relative,
+wrong-version or unsupported-target toolchain. Modules use the checked-in checksums
+and readonly mode; source changes rebuild the sibling binary with `-trimpath`.
+The opt-in CTests add the Go race suite, independent literal-wire client and build
+configuration/rebuild checks. Go race testing also needs the qualified Apple Clang.
+Full Go and creack/pty notices are copied beside the binary in `licenses/`.
+
+The only startup mode is `agentvision-core --ipc-fd=3 --mode=frontend-spawned`,
+with a connected inherited Unix stream. There is no listener, arbitrary command
+option, daemon, persistence or reconnect. The frontend owns the core child; Go
+owns its PTYs and direct shell children. Shutdown or contact loss cancels and
+joins local work and attempts bounded owned cleanup. Cleanup uncertainty is an
+error, never a successful Shutdown Ack. A slow writer or missing output credit
+fails contact after the named two-second policy. Sessions are ordinary local
+processes, with inherited environment/cwd and no sandbox or descendant-isolation
+claim. The C++ adapter and desktop cutover remain separate review boundaries.

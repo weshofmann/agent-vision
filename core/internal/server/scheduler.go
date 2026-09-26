@@ -95,7 +95,11 @@ func (s *Scheduler) Enqueue(e session.Event) error {
 	} else {
 		// Encode once only for schema/size validation; control payloads are bounded
 		// and the temporary validation copy is at most one v1 frame (64 KiB).
-		frame, err := protocol.Encode(e.Message, e.Request, e.Session, 1)
+		version := uint16(1)
+		if _, ok := e.Message.(protocol.HelloAck); ok {
+			version = 0
+		}
+		frame, err := protocol.Encode(e.Message, e.Request, e.Session, version)
 		if err != nil {
 			return err
 		}
