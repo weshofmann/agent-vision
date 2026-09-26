@@ -26,6 +26,7 @@ func (m *Manager) start(r *reservation, window uint32) {
 		r.naturalDone = make(chan struct{})
 		r.monitorDone = make(chan struct{})
 		m.monitorWorkers.Add(1)
+		m.monitorCount++
 		r.ioWorkers.Add(2) // registration before Created and startDone publication
 		r.published = true
 		r.state = live

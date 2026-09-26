@@ -526,3 +526,15 @@ func TestOutputDrainFakeClock(t *testing.T) {
 		t.Fatalf("fake-clock seal %+v", v)
 	}
 }
+
+// The count represents already reserved live/retired monitor owners, including
+// those whose last payload finished but whose goroutine has not joined yet.
+func TestOutputMonitorAdmissionBound(t *testing.T) {
+	m := newFixtureManager(policy.Default(), spawnFunc(func(context.Context, SpawnConfig) (*Resources, error) {
+		return fixtureResources(newFixtureProcess()), nil
+	}), newSink())
+	m.monitorCount = 2064
+	errorCode(t, m.Admit(frame(t, protocol.CreateSession{Rows: 24, Cols: 80, ReceiveWindow: 262144}, 1, 0)), protocol.ErrorLimit)
+	m.monitorCount = 0
+	shutdown(t, m)
+}

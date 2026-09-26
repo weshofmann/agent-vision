@@ -151,6 +151,7 @@ func (m *Manager) outputEnded(r *reservation, fatal bool) {
 func (m *Manager) watchCredit(r *reservation) {
 	defer m.monitorWorkers.Done()
 	defer close(r.monitorDone)
+	defer func() { m.mu.Lock(); m.monitorCount--; m.mu.Unlock() }()
 	for {
 		l := r.ledger
 		l.mu.Lock()

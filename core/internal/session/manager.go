@@ -85,6 +85,7 @@ type Manager struct {
 	creditCtx       context.Context
 	creditCancel    context.CancelFunc
 	monitorWorkers  sync.WaitGroup
+	monitorCount    int
 	commandCount    int
 	now             func() time.Time
 	policy          policy.Policy
@@ -135,7 +136,15 @@ func (m *Manager) Admit(f protocol.Frame) error {
 	}
 	switch v := msg.(type) {
 	case protocol.CreateSession:
-		if len(m.records) >= policy.MaxSessions || m.exhausted {
+		startingMonitors := 0
+		for _, r := range m.records {
+			if r.state == starting {
+				startingMonitors++
+			}
+		}
+		// A retired goroutine remains owned until it exits, even after its final
+		// ticket releases byte capacity. Include accepted starts before spawning.
+		if len(m.records) >= policy.MaxSessions || m.exhausted || m.monitorCount+startingMonitors >= policy.MaxSessions*(policy.MaxOutputChunks+1) {
 			return reject(protocol.ErrorLimit)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
