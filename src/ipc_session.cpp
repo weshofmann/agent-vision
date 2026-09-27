@@ -66,7 +66,7 @@ void IpcSessionTransport::resize(TPoint p) noexcept {
     if (p.x <= 0 || p.y <= 0 || p.x > 65535 || p.y > 65535)
         return;
     if (endpoint_->resize(uint16_t(p.y), uint16_t(p.x)) == EnqueueResult::Overflow)
-        endpoint_->cancelLocal(); // Explicit backend loss; never fabricate exit.
+        endpoint_->cancelLocal(); // Local presentation cancellation leaves shared backend authority unchanged.
 }
 void IpcSessionTransport::cancelLocal() noexcept {
     if (endpoint_)

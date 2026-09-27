@@ -130,6 +130,10 @@ if(BUILD_TESTING)
         file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/fake_core.py PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
         add_test(NAME core_process COMMAND core_process_test)
         set_tests_properties(core_process PROPERTIES TIMEOUT 20)
+        add_test(NAME ipc_terminal_decode COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_decode.py")
+        set_tests_properties(ipc_terminal_decode PROPERTIES TIMEOUT 30
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
     endif()
     add_test(NAME source_guard COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_guard.py"

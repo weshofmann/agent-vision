@@ -10,6 +10,12 @@ class Screen(pyte.Screen):
             super().set_margins(*args)
 
 
+def terminal_decoder(screen=None):
+    screen=screen if screen is not None else Screen(120,40)
+    stream=pyte.ByteStream(screen)
+    return screen, stream.feed
+
+
 def run(binary,mode,folder):
     folder.mkdir(parents=True,exist_ok=False)
     master,slave=pty.openpty()
@@ -36,7 +42,7 @@ def run(binary,mode,folder):
         (folder/'outer.json').write_text(json.dumps({'status':status,'termios_restored':restored,'cooked_input':cooked==b'outer-check\n'}))
         os._exit(0 if status==0 and restored and cooked==b'outer-check\n' else 1)
     raw=bytearray();deadline=time.monotonic()+90;sent=False;status=None
-    screen=Screen(120,40);stream=pyte.Stream(screen);caption=False;caption_ack=False;outer_seen=False
+    screen,feed=terminal_decoder();caption=False;caption_ack=False;outer_seen=False
     while time.monotonic()<deadline:
         readable,_,_=select.select([master],[],[],.02)
         if readable:
@@ -45,7 +51,7 @@ def run(binary,mode,folder):
                 if e.errno!=errno.EIO:raise
                 data=b''
             raw.extend(data)
-            stream.feed(data.decode('utf-8', errors='replace'))
+            feed(data)
             if not outer_seen and 'authority/contact lost' in '\n'.join(screen.display):
                 caption=True
             if caption and not caption_ack and mode!='premature-loss':

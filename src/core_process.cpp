@@ -111,7 +111,9 @@ LaunchResult CoreProcess::launch(const std::string &path) {
     char *real=realpath(path.c_str(),nullptr); if(!real) return {nullptr,LaunchError::InvalidPath,errno};
     std::string canonical(real); free(real);
     struct stat st{}; if(stat(canonical.c_str(),&st)!=0) return {nullptr,LaunchError::InvalidPath,errno};
-    if(!S_ISREG(st.st_mode) || access(canonical.c_str(),X_OK)!=0) return {nullptr,LaunchError::NotExecutable,errno};
+    // A known nonregular path is not executable; no failed syscall supplied errno.
+    if(!S_ISREG(st.st_mode)) return {nullptr,LaunchError::NotExecutable,EACCES};
+    if(access(canonical.c_str(),X_OK)!=0) return {nullptr,LaunchError::NotExecutable,errno};
     int sockets[2]; if(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)!=0) return {nullptr,LaunchError::Socket,errno};
     // Backend source can be FD3. Move it first so dup2 never preserves CLOEXEC.
     int source=-1;

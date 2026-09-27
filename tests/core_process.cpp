@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <csignal>
 #include <fcntl.h>
+#include <libproc.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -45,6 +46,35 @@ static void copyExecutable(const std::string &from,const std::string &to) {
     std::ifstream in(from,std::ios::binary); std::ofstream out(to,std::ios::binary); out<<in.rdbuf(); out.close();
     check(bool(in) && bool(out) && chmod(to.c_str(),0700)==0,"copy fixture executable");
 }
+static int childCount() {
+    pid_t children[64];
+    int n=proc_listchildpids(getpid(),children,sizeof(children));
+    check(n>=0,"direct child inventory"); return n;
+}
+static void validationErrors() {
+    std::string pattern=std::string(FAKE_CORE)+".validation-XXXXXX";
+    std::vector<char> dir(pattern.begin(),pattern.end()); dir.push_back(0);
+    check(mkdtemp(dir.data()),"owned validation directory");
+    struct Cleanup {
+        std::string directory, file;
+        ~Cleanup() { unlink(file.c_str()); rmdir(directory.c_str()); }
+    } cleanup{dir.data(),std::string(dir.data())+"/nonexec"};
+    int fd=open(cleanup.file.c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);
+    check(fd>=0,"owned nonexecutable regular fixture"); close(fd);
+    auto beforeFD=fdCount(); int beforeChildren=childCount();
+    for(int seed:{EBUSY,ERANGE}) {
+        errno=seed;
+        auto rejected=CoreProcess::launch(cleanup.directory);
+        check(!rejected.process && rejected.error==LaunchError::NotExecutable &&
+              rejected.systemError==EACCES,"nonregular deterministic EACCES independent of errno");
+        check(fdCount()==beforeFD && childCount()==beforeChildren,"nonregular creates no owner FD/child");
+    }
+    errno=EBUSY;
+    auto denied=CoreProcess::launch(cleanup.file);
+    check(!denied.process && denied.error==LaunchError::NotExecutable &&
+          denied.systemError==EACCES,"regular access failure retains actual EACCES");
+    check(fdCount()==beforeFD && childCount()==beforeChildren,"access failure creates no owner FD/child");
+}
 static char readByte(int fd) { char b=0; check(read(fd,&b,1)==1,"child ready"); return b; }
 int main(int argc,char **argv) { try {
     if(argc==2 && std::string(argv[1])=="sibling-check") {
@@ -76,6 +106,7 @@ int main(int argc,char **argv) { try {
     check(!CoreProcess::launch("relative").process,"relative rejected");
     check(!CoreProcess::launch("/does-not-exist/agentvision-core").process,"missing rejected");
     check(!CoreProcess::launch("/").process,"directory rejected");
+    validationErrors();
 
     // Native self exec catches FD3 CLOEXEC, inherited descriptor leaks, and exact argv.
     char resolved[4096]; check(realpath(argv[0],resolved),"self path");
