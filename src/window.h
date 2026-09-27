@@ -10,7 +10,7 @@ class TerminalWindow final : public tvterm::BasicTerminalWindow {
     std::shared_ptr<agentvision::SessionEndpoint> endpoint;
     const char label;
     agentvision::RequestId closing {0};
-    bool closeCompleted {false}, finished {false}, resizeFailed {false};
+    bool closeCompleted {false}, finished {false}, resizeFailed {false}, authorityLost {false};
     std::string caption;
     void finish();
 public:

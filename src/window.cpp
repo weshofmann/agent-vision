@@ -20,7 +20,7 @@ TerminalWindow::TerminalWindow(const TRect &bounds, tvterm::TerminalController &
 bool TerminalWindow::isLive() const noexcept
 {
     auto state = endpoint->metadata().state;
-    return state == SessionState::Starting || state == SessionState::Running;
+    return !authorityLost && (state == SessionState::Starting || state == SessionState::Running);
 }
 void TerminalWindow::finish()
 {
@@ -73,6 +73,10 @@ void TerminalWindow::handleEvent(TEvent &event)
         if (event.message.command == cmStopPresentations) finish();
         if (event.message.command == cmCoreEvent && event.message.infoPtr) {
             const auto &core = *static_cast<const ConnectionEvent *>(event.message.infoPtr);
+            if (core.kind == ConnectionEvent::Kind::Lost) {
+                authorityLost = true; // Separate contact authority from any known exit result.
+                closing = 0; // The failed connection can no longer complete this UI correlation.
+            }
             if (core.session == endpoint->metadata().id) {
                 if (core.kind == ConnectionEvent::Kind::Closed && closing && core.request == closing)
                     closeCompleted = true;
@@ -102,12 +106,12 @@ void TerminalWindow::handleEvent(TEvent &event)
 }
 void TerminalWindow::close()
 {
-    if (closing && endpoint->metadata().state != SessionState::Lost) return;
+    if (closing && !authorityLost) return;
     if (isLive() && messageBox(mfConfirmation | mfYesButton | mfNoButton,
                               "Terminate live terminal %c and close it?", label) != cmYes)
         return;
     auto state = endpoint->metadata().state;
-    if (state == SessionState::Lost || state == SessionState::Closed) {
+    if (authorityLost || state == SessionState::Lost || state == SessionState::Closed) {
         finish();
         TWindow::close();
         return;

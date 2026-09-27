@@ -391,8 +391,10 @@ def synthetic_desktop(binary, folder, mode):
     shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
     (package/'agentvision-core').chmod(0o700)
     audit = folder/'audit.json'
+    control = folder/'control'
     d = Desktop(frontend.resolve(), folder/'outer', extra_env={
-        'AV_DESKTOP_CASE': mode, 'AV_DESKTOP_AUDIT': str(audit.resolve())})
+        'AV_DESKTOP_CASE': mode, 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
     try:
         if mode in ('crash-before-created', 'crash-after-created', 'second-create-error'):
             restored = d.restore(expected_exit=1)
@@ -403,8 +405,24 @@ def synthetic_desktop(binary, folder, mode):
             if mode == 'second-create-error':
                 assert record['requests'][-1]['type'] == 8, 'partial Create failure did not Shutdown core'
             return {'single_diagnostic': True, 'partial_create_never_ready': True, **restored}
-        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]') and
+        d.wait(lambda: d.contains('Terminal A [live]') and
+                          (d.contains('Terminal B [live]') or (mode == 'exit-then-loss' and d.contains('Terminal B [exited 7]'))) and
                           d.contains('FIXTURE_READY'), 'synthetic desktop did not become ready')
+        if mode in ('exit-then-loss', 'close-then-loss'):
+            if mode == 'close-then-loss':
+                d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'pending loss Close confirmation missing')
+                d.confirm(True)
+            d.wait(lambda: d.contains('Terminal B [exited 7]'), 'known exit before loss missing')
+            before = json.loads(audit.read_text())['requests']
+            control.write_text('lose')
+            d.wait(lambda: d.raw.count(b'\x1b[?1049h') >= 2, 'known-exit loss did not restore/resume')
+            assert d.contains('Terminal B [exited 7]'), 'contact loss replaced authoritative exit result'
+            d.menu('w')
+            d.wait(lambda: not d.contains('Terminal B ['), 'known exited/pending Close window could not dismiss after loss')
+            assert json.loads(audit.read_text())['requests'] == before, 'lost window attempted a backend request'
+            d.menu('q'); restored = d.restore()
+            return {'known_exit_preserved_after_loss': True, 'explicit_local_dismiss_after_loss': True,
+                    'no_request_after_actual_loss': True, 'pending_close_retired': mode == 'close-then-loss', **restored}
         # Cancellation sends neither Close nor Shutdown; use audit only for protocol effects.
         d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'fake close confirmation missing')
         d.confirm(False)
@@ -436,6 +454,8 @@ def startup_before(binary, folder): return synthetic_desktop(binary, folder, 'cr
 def startup_after(binary, folder): return synthetic_desktop(binary, folder, 'crash-after-created')
 def startup_second(binary, folder): return synthetic_desktop(binary, folder, 'second-create-error')
 def close_barrier(binary, folder): return synthetic_desktop(binary, folder, 'close-barrier')
+def exit_then_loss(binary, folder): return synthetic_desktop(binary, folder, 'exit-then-loss')
+def close_then_loss(binary, folder): return synthetic_desktop(binary, folder, 'close-then-loss')
 
 def scrolling(binary, folder):
     d = Desktop(binary, folder)
@@ -477,14 +497,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
              'quit-both': quit_both, 'scrolling': scrolling, 'loss-modal': loss_modal,
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
              'startup-before': startup_before, 'startup-after': startup_after,
-             'startup-second': startup_second, 'close-barrier': close_barrier}
+             'startup-second': startup_second, 'close-barrier': close_barrier,
+             'exit-then-loss': exit_then_loss, 'close-then-loss': close_then_loss}
     results = {name: cases[name](args.binary.resolve(), args.output/name)
                for name in (args.cases or list(cases))}
     args.output.mkdir(parents=True, exist_ok=True)

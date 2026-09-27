@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import select
 import struct
 
 peer = socket.socket(fileno=3)
@@ -15,9 +16,11 @@ audit = Path(os.environ['AV_DESKTOP_AUDIT'])
 seen = []
 created = 0
 held_close = None
+control = Path(os.environ.get('AV_DESKTOP_CONTROL', str(audit)+'.control'))
+released_close_count = 0
 
 def save():
-    audit.write_text(json.dumps({'requests': seen, 'created': created})+'\n')
+    audit.write_text(json.dumps({'requests': seen, 'created': created, 'released_close_count': released_close_count})+'\n')
 
 def exact(n):
     data = b''
@@ -46,6 +49,19 @@ assert kind == 1 and body == b'\x00\x01\x00\x01'
 send(2, request, body=struct.pack('>HII', 1, 65536, 0)+bytes(16), version=0)
 try:
     while True:
+        if control.exists():
+            action = control.read_text().strip()
+            control.unlink()
+            if action == 'lose': break
+            if action == 'closed':
+                assert held_close is not None
+                close_request, close_session = held_close
+                send(11, close_request, close_session, struct.pack('>Q', 1))
+                held_close = None
+                released_close_count += 1
+                save()
+        readable, _, _ = select.select([peer], [], [], .02)
+        if not readable: continue
         kind, request, session, body = read()
         if kind == 3:
             if mode == 'crash-before-created': break
@@ -59,13 +75,15 @@ try:
             if mode == 'crash-after-created': break
             if created == 2:
                 send(9, session=2, body=struct.pack('>Q', 1)+b'FIXTURE_READY\r\n')
+                if mode == 'exit-then-loss':
+                    send(10, session=2, body=struct.pack('>BIBQB', 1, 7, 0, 1, 1))
         elif kind == 6:
             send(12, request, session, struct.pack('>HIH', 9, 0, 0))
         elif kind == 5:
             send(13, request, session, struct.pack('>H', 5))
             if session == 1:
                 send(9, session=1, body=struct.pack('>Q', 1)+b'A_PROGRESS\r\n')
-                if held_close:
+                if held_close and mode == 'close-barrier':
                     close_request, close_session = held_close
                     send(11, close_request, close_session, struct.pack('>Q', 1))
                     held_close = None
