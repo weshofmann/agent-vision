@@ -2,9 +2,10 @@
 
 ## PR2 scope and gate
 
-Status: Tasks 7–9 have passed their independent task gates. Task 10 begins at
-`875fb1277fc53849d078921d819ca48f34b98e4c`; real-core presentation and complete
-qualification are pending. The [Task 9 gate closure](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5851235133)
+Status: Tasks 7–9 have passed their independent task gates. Task 10 implementation
+and native presentation qualification are submitted for review; its complete Go
+qualification remains unresolved. Task 10 began at
+`875fb1277fc53849d078921d819ca48f34b98e4c`. The [Task 9 gate closure](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5851235133)
 authorizes this bounded harness milestone.
 Base main: `3bc0b00d691739f3b472f3e0509f2db4c0ecf850`, the merged PR1.
 [PR1 operator acceptance](https://github.com/weshofmann/agent-vision/pull/8#issuecomment-5849812647)
@@ -155,6 +156,48 @@ Execwait/GC settings are qualification settings, not ordinary CTest defaults.
 The pinned libvterm configure compatibility deprecation remains explicitly
 retained; warning-free compilation is a separate claim.
 
-Final exact-source results and all per-cycle observations are pending below;
-failed fixture/compiler/stale-binary attempts remain in durable ignored evidence
-and will not be represented as successful changed-source coverage.
+Final source tested: `1a72981322c24009433e98709d3f1c76ab7d2e3c`.
+Default OFF: **36/36 passed, 53.07s**. Opt-in ON: **39/40 passed, 109.66s**;
+`core_go` failed because `TestNativeSixteenStartsEndpointBaselines` reported
+`native start failed: errno -6` at its spawn-error branch (0.41s). This is an
+unresolved native-start watch, distinct from the historical two-second timeout.
+The original error did not identify the failing PTY/spawn/rollback stage; absence
+of a cleanup error does not recover unreported counts or establish cleanup proof.
+One approved copied-source isolated race diagnostic passed all sixteen starts
+and cleanup (FD4, goroutines2). That pass is nondiagnostic: copied instrumentation
+and isolated ordering can change scheduling. There was no retry loop, timeout
+increase or retained Go change. Full Go qualification is not waived and Task10
+has not passed its independent gate.
+
+The full native `ipc_terminal` test passed in **16.12s**: two independent
+long-lived ordinary Go cores each processed sixteen 1MiB payloads through actual
+production presentation, exact publication/consumption/Credit completion before
+producer exit, final lastSequence/flush and retained emulator/history content,
+explicit A Close while B continued, Shutdown/loss and actual termios/cooked-input
+restoration. Final quiet observations for cycles0–15 are:
+
+| Sample | Normal core | Loss core |
+| --- | --- | --- |
+| Kernel threads | 14,14,14,14,15,15,15,15,15,16,16,16,16,16,16,16 | 14,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15 |
+| Frontend threads / FDs / direct children | 8 / 14 / 1 each cycle | 8 / 14 / 1 each cycle |
+| Core FDs / direct session children | 11 / 1 each cycle | 11 / 1 each cycle |
+| Owned presentation workers | Two joined per A, then two B at teardown | Two joined per A, then two B at teardown |
+| UI restoration acknowledgement | 22ms; core exit0 graceful | 18ms; direct core SIGKILL9, EOF contact loss |
+
+These are finite bands with late plateaus, without a claim about kernel-thread
+identity/cause or universal cleanup. Every pre-load/started/consumed/after-cycle/
+fixed250ms quiet sample remains in durable ignored evidence; earlier runs and
+failed stages remain separate. The local Apple100ms Task9 allowance is not used
+for Go growth. Native core binary remains CGO-disabled; Go-race results are
+separate. No descendant cleanup promise after core crash or restoration guarantee
+for SIGKILL of the frontend is made.
+
+Both complete builds compile without warnings; the inherited pinned configure
+deprecation remains. Durable evidence preserves source-relative compiler inputs,
+exact configs/flags, binaries, logs, synthetic raw terminal captures and hash/copy
+verification. Original ordinary `go test` deleted its temporary race executable;
+its exact source/command/log and original build cache are retained, without a
+claim that the exact failed race executable was recovered. Later documentation
+changes do not alter tested compiler inputs. Failed compiler/fixture attempts,
+including native7–9 stale-binary runs, remain explicitly invalid for changed-source
+coverage. The final independent Task10 and whole-PR reviews remain outstanding.
