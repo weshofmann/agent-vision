@@ -3,10 +3,14 @@
 Status: preparatory Tasks 11–12 only. The desktop still uses its local C++ PTY
 factory. These specifications do not qualify a cutover implementation.
 
-Parent: Draft [PR #9](https://github.com/weshofmann/agent-vision/pull/9), frozen
-published SHA `4b9b9ce1883a4d1d1d47096a8ae5326ad899b13d`. This candidate is based
-on `codex/go-core-client`, not main. The [overnight envelope](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853204271)
-permits dependent preparation while T10-R1 remains open. It does not accept the
+Parent: Draft [PR #9](https://github.com/weshofmann/agent-vision/pull/9). Its
+original frozen code checkpoint was `4b9b9ce1883a4d1d1d47096a8ae5326ad899b13d`;
+the later doc-only evidence checkpoint `7b5cf63f03d02e239695d56289d8274ed17b2bfe`
+is included here by ordinary merge commit `888f2fd50f57841c13fe4e87e60ea8c357a9c71e`.
+That merge adds `docs/go-core/migration-acceptance.md` and does not change the
+tested candidate source inputs. This candidate is based on `codex/go-core-client`,
+not main. The [overnight envelope](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853204271)
+permits dependent preparation while T10-R1 remains open; it does not accept the
 parent. The approved [migration plan](../superpowers/plans/2026-09-26-go-core-migration-plan.md)
 and [architecture](../superpowers/specs/2026-09-26-go-core-architecture-design.md)
 remain the implementation specification.
@@ -93,9 +97,12 @@ outer-terminal restoration, or the installed product. Existing
 core_connection_failures covers a wrong handshake response; the
 preparation batch records only the newly added focused cases.
 
-The corrective source and CTest registration were tested as reviewed working
-tree inputs on top of commit `c501324c0b9af566cff2233013c66b2e9bc5e2a8`;
-the source manifest SHA256 is `2e55b940b187df1246f7d2b68a49b5af31d04268faec5aa42d6df219be4a921a`.
+The corrective source checkpoint `44fffd4e685a8fdab08085529932627adfabbd43`
+was tested with the reviewed working-tree input set on top of
+`c501324c0b9af566cff2233013c66b2e9bc5e2a8`; the source manifest SHA256 is
+`2e55b940b187df1246f7d2b68a49b5af31d04268faec5aa42d6df219be4a921a`. The later
+doc-only parent merge and this documentation update preserve those tested C++,
+fixture, and CMake inputs byte-for-byte.
 One approved bounded batch built
 four standalone C++14 binaries from the three Core client implementation
 translation units, then passed the two-session output regression, existing
