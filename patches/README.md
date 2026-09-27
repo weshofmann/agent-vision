@@ -108,3 +108,14 @@ join completion and FDs immediately, report native task count, then require a
 single fixed 100 ms native baseline observation. Negative probes reject an
 unjoined worker, an FD leak and a still-live unowned native worker. This is a
 test measurement boundary, not a Darwin guarantee; Linux immediate count remains.
+
+
+The opt-in real-core native harness is registered only with
+`AGENTVISION_BUILD_CORE=ON`; the shipping app still calls the local factory.
+See [migration acceptance](../docs/go-core/migration-acceptance.md) for the exact
+qualified setup, retained-regression mapping and reproducible OFF/ON commands.
+The native test compiles the exact connection implementation for a read-only
+Credit-completion snapshot, without shipping instrumentation or a public API.
+Its link map verifies single extraction. Producer barriers wait for actual
+consumption/publication and completed Credit before exit; arbitrary wire frames
+coalesce only in queued owned chunks, never in a borrowed span.

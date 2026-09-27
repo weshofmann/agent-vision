@@ -1,25 +1,40 @@
 // Opt-in native qualification: actual Go core, transport, libvterm and views.
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
+#include <fcntl.h>
 #include <fstream>
+#include <functional>
 #include <libproc.h>
+#include <limits>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <poll.h>
 #include <signal.h>
 #include <stdexcept>
+#include <sys/socket.h>
 #include <thread>
 #include <tvterm/termemu.h>
 #include <unistd.h>
+#include <vector>
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wkeyword-macro"
 #define private public
+#include "core_connection.h"
 #include <tvterm/termctrl.h>
 #include <tvterm/termview.h>
 #include <tvterm/termwnd.h>
 #undef private
 #pragma clang diagnostic pop
+// Compile the exact production connection, exposing only read-only test snapshots.
+// The static client archive does not extract its duplicate connection object.
+#include AGENTVISION_CONNECTION_SOURCE
 #include "ipc_session.h"
 #include <tvterm/consts.h>
 #include <tvterm/vtermemu.h>
@@ -100,11 +115,12 @@ class Factory final : public tvterm::TerminalEmulatorFactory {
 };
 class Transport final : public tvterm::SessionTransport {
   public:
+    std::shared_ptr<SessionEndpoint> bound;
     IpcSessionTransport ipc;
     Observation &o;
     Transport(std::shared_ptr<CoreConnection> c, std::shared_ptr<SessionEndpoint> e,
               Observation &obs)
-        : ipc(c, e), o(obs) {}
+        : bound(e), ipc(c, e), o(obs) {}
     tvterm::EnqueueResult enqueueInput(TSpan<const char> b,
                                        tvterm::InputOrigin origin) noexcept override {
         auto result = ipc.enqueueInput(b, origin);
@@ -137,13 +153,13 @@ class Transport final : public tvterm::SessionTransport {
         ipc.cancelLocal();
     }
 };
-class Window final : public tvterm::BasicTerminalWindow {
+class PresentationWindow final : public tvterm::BasicTerminalWindow {
   public:
     tvterm::TerminalController &controller;
     Transport &transport;
     std::string caption;
     bool lost = false;
-    Window(TRect bounds, tvterm::TerminalController &c, Transport &t)
+    PresentationWindow(TRect bounds, tvterm::TerminalController &c, Transport &t)
         : TWindowInit(&initFrame), BasicTerminalWindow(bounds, c, constants), controller(c),
           transport(t) {}
     tvterm::TerminalView *terminalView() {
@@ -214,7 +230,7 @@ class App final : public TApplication {
     Restore &restore;
     std::ofstream &log;
     Observation a, b;
-    Window *wa = nullptr, *wb = nullptr;
+    PresentationWindow *wa = nullptr, *wb = nullptr;
     pid_t corePID = 0;
     int step = 0, cycle = 0;
     bool loss, failed = false;
@@ -238,20 +254,20 @@ class App final : public TApplication {
         log << "STAGE " << step << " cycle=" << cycle << '\n';
         log.flush();
     }
-    Window *make(SessionId id, Observation &o, bool second) {
+    PresentationWindow *make(SessionId id, Observation &o, bool second) {
         TRect bounds(second ? 5 : 0, second ? 3 : 0, second ? 67 : 62, second ? 25 : 22);
-        auto size = Window::viewSize(bounds);
+        auto size = PresentationWindow::viewSize(bounds);
         Factory factory(o);
         auto transport = std::unique_ptr<Transport>(new Transport(core, core->endpoint(id), o));
         auto &t = *transport;
         auto *c =
             tvterm::TerminalController::createWithTransport(size, factory, std::move(transport));
         check(c != nullptr, "production controller");
-        auto *w = new Window(bounds, *c, t);
+        auto *w = new PresentationWindow(bounds, *c, t);
         insertWindow(w);
         return w;
     }
-    void type(Window *w, const std::string &s) {
+    void type(PresentationWindow *w, const std::string &s) {
         w->select();
         for (char c : s) {
             TEvent ev{};
@@ -264,7 +280,7 @@ class App final : public TApplication {
             w->terminalView()->handleEvent(ev);
         }
     }
-    void local(Window *w, Observation &o) {
+    void local(PresentationWindow *w, Observation &o) {
         int scroll, copies;
         {
             std::lock_guard<std::mutex> l(o.mutex);
@@ -298,12 +314,29 @@ class App final : public TApplication {
         }
         w->terminalView()->draw();
     }
-    void finish(Window *w) {
+    void finish(PresentationWindow *w) {
         w->controller.finishPresentation();
         check(!w->controller.readerThread.joinable() && !w->controller.writerThread.joinable(),
               "both owned presentation workers joined");
         log << "WORKERS joined=2 cycle=" << cycle << '\n';
         log.flush();
+    }
+    bool creditsComplete(PresentationWindow *w) {
+        auto binding = w->transport.bound;
+        auto id = binding->metadata().id;
+        auto &state = *core->state_;
+        std::lock_guard<std::mutex> connection(state.mutex);
+        auto it = state.sessions.find(id);
+        if (!state.ready || state.stopped || state.readDone || state.shutdown ||
+            state.error != ContactError::None || it == state.sessions.end() ||
+            it->second.endpoint.get() != binding.get() || it->second.closed || it->second.closing)
+            return false;
+        auto &endpoint = *binding->state_;
+        std::lock_guard<std::mutex> queue(endpoint.mutex);
+        return !endpoint.cancelled && !endpoint.lost &&
+               endpoint.visible.state == SessionState::Running && endpoint.rawOutstanding == 0 &&
+               endpoint.consumedPending == 0 && it->second.credit == 0 && endpoint.borrowed == 0 &&
+               endpoint.chunks.empty();
     }
     void idle() override {
         TApplication::idle();
@@ -398,8 +431,11 @@ class App final : public TApplication {
                               "exact synthetic MiB pattern including PTY CR/LF translation");
                         completed = a.consumed == a.emulated && a.published == a.emulated;
                     }
-                    if (!completed)
+                    if (!completed || !creditsComplete(wa))
                         break;
+                    log << "CREDIT_COMPLETE cycle=" << cycle
+                        << " identity=current raw=0 pending=0 ticket=0\n";
+                    resources(log, "consumed", cycle, corePID);
                     check(wa->transport.ipc.metadata().state == SessionState::Running,
                           "producer remains alive at consumption barrier");
                     a.permitFlush = false;

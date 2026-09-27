@@ -65,7 +65,11 @@ if(BUILD_TESTING)
         add_executable(ipc_terminal_test tests/ipc_terminal.cpp)
         target_link_libraries(ipc_terminal_test PRIVATE agentvision-ipc-session)
         target_compile_options(ipc_terminal_test PRIVATE -Wall -Wextra -Wpedantic)
+        if(APPLE)
+            target_link_options(ipc_terminal_test PRIVATE "LINKER:-map,${CMAKE_CURRENT_BINARY_DIR}/ipc-terminal-link.map")
+        endif()
         target_compile_definitions(ipc_terminal_test PRIVATE
+            AGENTVISION_CONNECTION_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/src/core_connection.cpp"
             REAL_CORE="${CMAKE_CURRENT_BINARY_DIR}/agentvision-core"
             SESSION_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_fixture.py")
         add_dependencies(ipc_terminal_test agentvision-core-build)
