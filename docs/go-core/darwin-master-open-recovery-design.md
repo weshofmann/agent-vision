@@ -66,6 +66,16 @@ Propose one narrow downstream extension to creack/pty **v1.1.24**, commit
   preserve the resource pointer and joined error so `Manager.start` retains the
   uncertain reservation. `Resources.closeOnce` prevents a second ambiguous Close;
   ownership is not erased merely because a failure response was sent.
+- Include `core/internal/session/types.go` in this narrow integration:
+  `Resources.CloseParentSlave() error` records one slave File.Close attempt and
+  memoizes its first result under a per-resource once guard. Replace Spawn's
+  direct post-child `s.Close()` with this method; Rollback uses the same recorded
+  result without calling that File.Close again or normalizing its first error
+  away as ErrClosed. Master close and sole-child cleanup remain independently
+  attempted. A slave-close error survives even a successful child reap and later
+  Rollback calls; `Manager.start` retains the uncertain reservation and shutdown
+  reports the existing cleanup error, never a successful Shutdown Ack. This
+  addresses a source-supported gap, not a reproduced native Close failure.
 
 The integration choice is an explicit local module replacement:
 `github.com/creack/pty => ./third_party/creack-pty` in `core/go.mod`, with a complete
@@ -149,6 +159,12 @@ I/O is added to acquisition. Existing generic spawn error on the wire remains.
    and owner reachable, exactly zero or one child starts, and sole-child reaping.
    Include a later negative-six plus failing master close: it must not trigger
    recovery. Preserve existing startup/native assertions and deadlines.
+   Add a first **post-child parent-slave Close error** followed by successful
+   child reap and repeated Rollback: one slave File.Close call, one master close,
+   one child start/sole reaper, no reacquisition; the original close error remains
+   observable, the uncertain reservation stays reachable and Shutdown produces
+   cleanup failure rather than Ack. Test the actual Resources/Spawn/Manager path,
+   not only a standalone close helper. No new cleanup retry is introduced.
 4. Publish code/source/patch identities and obtain independent Astra/high
    implementation review before native verification. Name the injected matrix
    tests `TestDarwinMasterOpenInjected` and `TestDarwinMasterSpawnInjected`.
@@ -179,9 +195,17 @@ I/O is added to acquisition. Existing generic spawn error on the wire remains.
    Keep all original T10/R15 evidence. Injected passes prove mechanics, native
    nonreproduction is finite evidence; neither establishes kernel cause.
 7. Re-measure repeated heavier frontend/core sessions at that same code SHA.
-   Predeclare three fresh runs (two normal teardown, one contact-loss teardown),
-   each one long-lived core with exactly 16 sessions using the existing bounded
-   >=1 MiB workload and quiet post-session samples. Record every FD/child/owned
+   Predeclare three fresh frontend/core invocations (normal, normal, loss),
+   separate from runs already included in whole qualification. Each retains the
+   existing harness: one core, persistent B plus 16 successive heavy A sessions
+   = **17 creations**, at most two live. Total **51 creations / 48 heavy A cycles**,
+   with the unchanged bounded >=1 MiB workload and quiet post-cycle samples.
+   Use `tests/ipc_terminal_pty.py` in separate `--cases normal`, `--cases normal`,
+   and `--cases loss` invocations with unique ignored evidence directories;
+   duplicate normal cases in one invocation conflict with its per-mode directory
+   guard. Preserve its outer deadline and CMake's 190 s timeout (no extension).
+   Stop on unexpected failure, preserve it, and seek review before another run.
+   Record every FD/child/owned
    worker/kernel-thread sample and consumption/publication/Credit completion;
    compare plateaus and per-session trend, preserving late samples. A finite
    plateau is not a universal bound or proof of lazy runtime initialization.
