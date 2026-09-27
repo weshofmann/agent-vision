@@ -1,3 +1,13 @@
+## Tasks 11–12 continuation after accepted PR2 integration
+
+The operator accepted PR2 in [PR #9 acceptance](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859566997) and authorized this continuation in [PR #11](https://github.com/weshofmann/agent-vision/pull/11#issuecomment-5859569996). T10-R1 is closed for the bounded implementation and qualified Darwin arm64 environment; native retry efficacy remains unobserved and its kernel cause unproven.
+
+Main integration `9758954a7a6d0ff53848f460c6f7e5428375320b` is a history-preserving merge of accepted PR2 head `9e4c5fb954401be43e3289ae1a4d12d90844338e`; their trees match. The existing accepted preparation `4f8cdb7298de493ad7378ebf2739424affd1fa49` was merged with main without conflicts at `3dfee765461b9aa70d2e49c24848408ea8decb49`.
+
+This continuation executes only approved migration Tasks 11–12: two Go-authoritative terminals, typed presentation and asynchronous close/quit, then required sibling build/install and relocation qualification. Integrated preparation and inherited tests must pass before implementation. The prior preparation record below describes its historical scope and evidence, not current verification. The old local lifecycle source and tests remain intact; Task 13 removal requires later operator acceptance. PR #11 stays Draft and unmerged. Current automation, independent review and the unchecked manual checklist will be reported separately before Task 12 operator review.
+
+---
+
 # Dependent cutover preparation
 
 Status: preparatory Tasks 11–12 only. The desktop still uses its local C++ PTY
