@@ -104,27 +104,40 @@ void AgentVisionApp::stopPresentations()
 void AgentVisionApp::acknowledgeCleanup()
 {
     std::lock_guard<std::mutex> lock(cleanupMutex);
+    cleanupTarget.acknowledge(agentvision::RestorationTarget::Clock::now());
     cleanupAcknowledged = true;
     cleanupChanged.notify_all();
 }
 void AgentVisionApp::localStopped()
 {
+    const auto entry = agentvision::RestorationTarget::Clock::now();
     // start() can fail synchronously before assigning connection. No self-wait.
     if (std::this_thread::get_id() == uiThread) {
+        {
+            std::lock_guard<std::mutex> lock(cleanupMutex);
+            cleanupTarget.begin(entry);
+        }
         stopPresentations();
         acknowledgeCleanup();
+        std::lock_guard<std::mutex> lock(cleanupMutex);
+        cleanupTargetMiss = cleanupTarget.missed();
         return;
     }
     std::unique_lock<std::mutex> lock(cleanupMutex);
+    cleanupTarget.begin(entry); // Includes time awaiting this mutex; no target reset.
     cleanupRequested = true;
     TEventQueue::wakeUp();
-    if (!cleanupChanged.wait_for(lock, std::chrono::milliseconds(100),
-                                 [this] { return cleanupAcknowledged; })) {
+    const bool timedOut = !cleanupChanged.wait_until(lock, cleanupTarget.deadline(),
+                                 [this] { return cleanupAcknowledged; });
+    if (timedOut) {
         cleanupTargetMiss = true;
         // Safety barrier: missed target is not proof that the terminal restored.
         // getEvent services finite local work; never escalate before its real ack.
         cleanupChanged.wait(lock, [this] { return cleanupAcknowledged; });
     }
+    // Predicate success may occur after the deadline. Judge the first real proof,
+    // not wait_until's return value or the time this waiter gets scheduled again.
+    cleanupTargetMiss = cleanupTarget.missed(timedOut);
 }
 void AgentVisionApp::serviceCleanup()
 {

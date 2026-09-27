@@ -2,6 +2,7 @@
 #define Uses_TApplication
 #include <tvision/tv.h>
 #include "core_connection.h"
+#include "frontend_cleanup.h"
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -12,6 +13,7 @@ class AgentVisionApp final : public TApplication {
     const std::thread::id uiThread {std::this_thread::get_id()};
     std::mutex cleanupMutex;
     std::condition_variable cleanupChanged;
+    agentvision::RestorationTarget cleanupTarget;
     bool cleanupRequested {false}, cleanupAcknowledged {false};
     bool suspended {false}, stopped {false}, cleanupTargetMiss {false};
     std::string startupFailure, cleanupFailure;
