@@ -52,7 +52,7 @@ cannot hide tracked dependency edits. Root and recursive dependencies with
 even if those files are clean: Git may hide their effective bytes from the diff.
 The guard reads NUL-delimited `git ls-files -v` tags without clearing flags or
 rewriting the index; see [Git's documented tags](https://git-scm.com/docs/git-ls-files).
-Eighteen real-Git fixture cases include both flags at root/dependency/nested levels
+Twenty-four real-Git fixture cases include both flags at root/dependency/nested levels
 and verify rejected files, HEAD, staged entries and flags remain unchanged. Use a
 fresh build directory after changing patch versions. Focused tests use real PTYs,
 wait statuses, kernel thread counts and FD counts, not mocked lifecycle calls.
@@ -89,3 +89,22 @@ or the complete exact effective composition, rejects partial/conflicting/staged
 unexpected edits before mutation, and preserves dependency files/index/flags on
 rejection. An old patch composition requires a fresh owned pinned source checkout;
 the guard never repairs or resets it.
+
+
+Input admission Closed is distinct from reader End/Lost: the controller suppresses
+process emission but continues consuming and flushing queued final output. It
+exposes read disconnection only after final endpoint flush acknowledgment, avoiding
+UI finish cancellation racing pending exit publication. Writer byte segments split
+at 32,768 bytes; adapter rejects larger spans before allocating payload storage.
+Guard fixtures compare raw index bytes immediately around the guard, separately
+from semantic source/index/flags snapshots: their own recursive diagnostic Git diff
+may refresh stat cache even with optional locks disabled.
+
+Presentation finish still cancels the endpoint reader without sending IPC Close.
+Bound Close may clean up the same retained authoritative Exited endpoint after
+local cancellation; Lost, retired/replacement, closing/closed and shutdown gates
+remain. Input/resize remain cancelled. Apple lifecycle tests check original owned
+join completion and FDs immediately, report native task count, then require a
+single fixed 100 ms native baseline observation. Negative probes reject an
+unjoined worker, an FD leak and a still-live unowned native worker. This is a
+test measurement boundary, not a Darwin guarantee; Linux immediate count remains.

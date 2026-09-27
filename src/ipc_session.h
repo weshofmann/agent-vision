@@ -6,7 +6,8 @@ namespace agentvision {
 class IpcSessionTransport final : public tvterm::SessionTransport {
     std::shared_ptr<CoreConnection> connection_;
     std::shared_ptr<SessionEndpoint> endpoint_;
-public:
+
+  public:
     IpcSessionTransport(std::shared_ptr<CoreConnection>, std::shared_ptr<SessionEndpoint>) noexcept;
     tvterm::EnqueueResult enqueueInput(TSpan<const char>, tvterm::InputOrigin) noexcept override;
     tvterm::TransportChunk readChunk() noexcept override;
@@ -17,4 +18,4 @@ public:
     SessionMetadata metadata() const noexcept;
     RequestId requestClose() noexcept;
 };
-}
+} // namespace agentvision

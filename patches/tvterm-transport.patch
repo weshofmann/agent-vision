@@ -1,5 +1,5 @@
 diff --git a/include/tvterm/termctrl.h b/include/tvterm/termctrl.h
-index a18c9b1..7729fff 100644
+index a18c9b1..bc870dd 100644
 --- a/include/tvterm/termctrl.h
 +++ b/include/tvterm/termctrl.h
 @@ -8,10 +8,32 @@
@@ -60,7 +60,7 @@ index a18c9b1..7729fff 100644
      bool stateHasBeenUpdated() noexcept;
      bool clientIsDisconnected() noexcept;
  
-@@ -38,7 +73,8 @@ private:
+@@ -38,25 +73,28 @@ private:
  
      struct TerminalEventLoop;
  
@@ -70,9 +70,10 @@ index a18c9b1..7729fff 100644
      Mutex<TerminalState> terminalState;
      TerminalEventLoop &eventLoop;
      TerminalEmulator &terminalEmulator;
-@@ -46,17 +82,18 @@ private:
+ 
      std::atomic<bool> updated {false};
      std::atomic<bool> disconnected {false};
++    std::atomic<bool> inputClosed {false}; // Sealed input is independent of queued final reads.
  
 +#if !defined(_WIN32)
 +    std::thread writerThread;
@@ -96,10 +97,10 @@ index a18c9b1..7729fff 100644
  {
      return disconnected;
 diff --git a/source/tvterm-core/termctrl.cc b/source/tvterm-core/termctrl.cc
-index 3010d22..b60417b 100644
+index 3010d22..56fcef9 100644
 --- a/source/tvterm-core/termctrl.cc
 +++ b/source/tvterm-core/termctrl.cc
-@@ -12,15 +12,67 @@
+@@ -12,15 +12,74 @@
  namespace tvterm
  {
  
@@ -134,11 +135,18 @@ index 3010d22..b60417b 100644
 +        // Bound intermediary storage too, independently of transport admission.
 +        if (data.size() > 65536 - staged || segments.size() >= 128) { overflow = true; return; }
 +        try {
-+            if (segments.empty() || segments.back().origin != origin || segments.back().isResize)
-+                segments.push_back({{}, origin});
-+            auto &bytes = segments.back().bytes;
-+            bytes.insert(bytes.end(), data.begin(), data.end());
-+            staged += data.size();
++            size_t offset = 0;
++            while (offset < data.size()) {
++                if (segments.empty() || segments.back().origin != origin ||
++                    segments.back().isResize || segments.back().bytes.size() == 32768) {
++                    if (segments.size() >= 128) { overflow = true; return; }
++                    segments.push_back({{}, origin});
++                }
++                auto &bytes = segments.back().bytes;
++                size_t count = std::min<size_t>(32768 - bytes.size(), data.size() - offset);
++                bytes.insert(bytes.end(), data.begin() + offset, data.begin() + offset + count);
++                offset += count; staged += count;
++            }
 +        } catch (...) { overflow = true; }
 +    }
 +};
@@ -174,7 +182,7 @@ index 3010d22..b60417b 100644
      }
  };
  
-@@ -41,17 +93,19 @@ struct TerminalController::TerminalEventLoop
+@@ -41,17 +100,19 @@ struct TerminalController::TerminalEventLoop
  
      TerminalController &ctrl;
  
@@ -200,7 +208,7 @@ index 3010d22..b60417b 100644
  
      // Used for waking up the WriterLoop a short time after data was received
      // by the ReaderLoop thread.
-@@ -63,19 +117,33 @@ struct TerminalController::TerminalEventLoop
+@@ -63,19 +124,33 @@ struct TerminalController::TerminalEventLoop
      std::condition_variable condVar;
  
      // Used for storing data to be sent to the client.
@@ -236,7 +244,7 @@ index 3010d22..b60417b 100644
      void notifyMainThread() noexcept;
  };
  
-@@ -88,10 +156,27 @@ TerminalController *TerminalController::create( TPoint size,
+@@ -88,10 +163,27 @@ TerminalController *TerminalController::create( TPoint size,
                       terminalEmulatorFactory.getCustomEnvironment(), onError ) )
          return nullptr;
  
@@ -249,13 +257,13 @@ index 3010d22..b60417b 100644
 +    controller->localTransport = local;
 +    return controller;
 +}
-+
+ 
 +TerminalController *TerminalController::createWithTransport(TPoint size,
 +    TerminalEmulatorFactory &terminalEmulatorFactory, std::unique_ptr<SessionTransport> transport) noexcept
 +{
 +    if (!transport) return nullptr;
 +    auto &terminalController = *new TerminalController(size, terminalEmulatorFactory, std::move(transport));
- 
++
 +#if !defined(_WIN32)
 +    terminalController.writerThread = std::thread([&terminalController] {
 +        terminalController.eventLoop.runWriterLoop();
@@ -267,7 +275,7 @@ index 3010d22..b60417b 100644
      // 'this' will be deleted when:
      // 1. 'shutDown()' is invoked from the main thread.
      // 2. Both the WriterLoop and ReaderLoop threads exit.
-@@ -108,23 +193,77 @@ TerminalController *TerminalController::create( TPoint size,
+@@ -108,23 +200,77 @@ TerminalController *TerminalController::create( TPoint size,
          owningPtr->eventLoop.runReaderLoop();
      }).detach();
  
@@ -353,7 +361,7 @@ index 3010d22..b60417b 100644
      eventLoop(*new TerminalEventLoop {*this}),
      terminalEmulator(terminalEmulatorFactory.create(size, eventLoop.clientDataWriter))
  {
-@@ -138,90 +277,90 @@ TerminalController::~TerminalController()
+@@ -138,90 +284,91 @@ TerminalController::~TerminalController()
  
  void TerminalController::sendEvent(const TerminalEvent &event) noexcept
  {
@@ -363,7 +371,7 @@ index 3010d22..b60417b 100644
 +    {
 +        std::lock_guard<std::mutex> lock(eventLoop.queueMutex);
 +        // Local scroll/copy/viewport events remain useful after End/Lost/finish.
-+        if (disconnected || eventLoop.terminated) {
++        if (inputClosed || disconnected || eventLoop.terminated) {
 +            if (event.type != TerminalEventType::ScrollBackOffsetChange &&
 +                event.type != TerminalEventType::CopySelection &&
 +                event.type != TerminalEventType::ViewportResize) return;
@@ -448,11 +456,12 @@ index 3010d22..b60417b 100644
 +                bool updated = false;
 +                currentTimeout = {};
 +                updateState(updated);
-+                ctrl.disconnected = true;
 +            }
-             notifyMainThread();
++            notifyMainThread();
 +            if (chunk.kind == TransportChunk::Kind::End)
 +                ctrl.transport->flushed(chunk.sequence); // Publication precedes status.
++            ctrl.disconnected = true; // UI finish cannot cancel before flushed().
+             notifyMainThread();
 +            wakeWriter(); // Retain local interactions; finishPresentation joins.
              break;
          }
@@ -500,7 +509,7 @@ index 3010d22..b60417b 100644
      }
  }
  
-@@ -233,13 +372,14 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+@@ -233,13 +380,14 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
          bool hasEvent;
          TerminalEvent event;
  
@@ -517,7 +526,7 @@ index 3010d22..b60417b 100644
  
          if (!hasEvent)
              break;
-@@ -247,8 +387,10 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+@@ -247,8 +395,10 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
          switch (event.type)
          {
              case TerminalEventType::ViewportResize:
@@ -529,7 +538,7 @@ index 3010d22..b60417b 100644
                  viewportResized = true;
                  break;
  
-@@ -262,29 +404,11 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+@@ -262,29 +412,11 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
  void TerminalController::TerminalEventLoop::updateState(bool &updated) noexcept
  // Pre: 'this->mutex' is locked.
  {
@@ -563,7 +572,7 @@ index 3010d22..b60417b 100644
      }
  }
  
-@@ -302,20 +426,18 @@ void TerminalController::TerminalEventLoop::updateTimeouts() noexcept
+@@ -302,20 +434,25 @@ void TerminalController::TerminalEventLoop::updateTimeouts() noexcept
                              maxReadTimeout );
  }
  
@@ -580,11 +589,18 @@ index 3010d22..b60417b 100644
 -            ctrl.disconnected = true;
 -            updated = true;
 +    for (auto &segment : outputBuffer) {
-+        if (ctrl.disconnected) break;
++        if (ctrl.inputClosed || ctrl.disconnected) break;
 +        if (segment.isResize) ctrl.transport->resize(segment.size);
-+        else if (ctrl.transport->enqueueInput(
-+            {segment.bytes.data(), segment.bytes.size()}, segment.origin) != EnqueueResult::Queued) {
-+            ctrl.disconnected = true; updated = true;
++        else {
++            auto result = ctrl.transport->enqueueInput(
++                {segment.bytes.data(), segment.bytes.size()}, segment.origin);
++            if (result != EnqueueResult::Queued) {
++                ctrl.inputClosed = true;
++                // Closed may mean sealed while final output is still queued.
++                // Only read End/Lost publishes presentation completion.
++                if (result == EnqueueResult::Overflow) ctrl.disconnected = true;
++                updated = true;
++            }
          }
 -
 -        outputBuffer.clear();

@@ -72,6 +72,7 @@ while True:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)
     elif t in (5,6,14):
         if mode=='dsr-reserve' and t in (5,6):
+            held.append((t,r,sid))
             ordinary.append((t,body))
             if len(ordinary)<=47:
                 assert ordinary[:min(2,len(ordinary))]==[(5,b'u'*30720)]*min(2,len(ordinary))
@@ -154,6 +155,9 @@ while True:
             old_r,old_sid=credit_held
             s.sendall(frame(12,old_r,old_sid,b'\x00\x03'+bytes(6)))
     elif t==8:
+        if mode=='dsr-reserve':
+            assert len(ordinary)==48
+            for old_t,old_r,old_sid in held: s.sendall(frame(13,old_r,old_sid,struct.pack('>H',old_t)))
         if mode=='control-lanes':
             assert control_resizes==47 and len(control_credit)==16 and len(control_close)==16
             for old_t,old_r,old_sid in sorted(control_held,key=lambda x:x[0]!=7):

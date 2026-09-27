@@ -493,7 +493,8 @@ RequestId CoreConnection::admitClose(SessionId id, const SessionEndpoint *source
             if (it->second.endpoint.get() != source) return 0;
             auto &e = *it->second.endpoint->state_;
             endpointLock = std::unique_lock<std::mutex>(e.mutex);
-            if (e.cancelled || e.lost) return 0;
+            // Local presentation finish cancels reads, not authoritative Exited cleanup.
+            if (e.lost || (e.cancelled && e.visible.state != SessionState::Exited)) return 0;
         }
         Frame f;
         f.type = MessageType::CloseSession;

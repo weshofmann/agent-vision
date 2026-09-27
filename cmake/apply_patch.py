@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate effective pinned source before applying; never reset existing edits."""
 from pathlib import Path
+import os
 import subprocess
 import sys
 
@@ -19,7 +20,8 @@ for patch in patches:
 accepted = b''.join(blocks[key] for key in sorted(blocks))
 
 def git(repo, *args):
-    return subprocess.check_output(['git', '-C', str(repo), *args])
+    return subprocess.check_output(['git', '-C', str(repo), *args],
+                                   env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
 
 def effective_diff(repo):
     # diff trusts these index bits even if compiler-visible bytes changed.

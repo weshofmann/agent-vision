@@ -6,7 +6,15 @@ Scope: owned transport chunks, tagged emulator replies, final flush ordering, im
 
 Verification will include behavioral RED/GREEN tests, real libvterm DSR/CPR, endpoint binding and reserves, the forced scrollbar lock schedule, all lifecycle and default desktop tests. Task 10, wire/backend changes, cutover and renderer changes are outside this checkpoint.
 
-Status: owned seam, matching endpoint identity helpers, IPC adapter and composed
-source guard implemented. Source guard 24 cases, seam/adapter and forced scrollbar
-checks pass. Real saturated IPC reply qualification and complete lifecycle/default
-desktop suite remain pending at this checkpoint. This is not Task 9 completion.
+Status: the seam, bound adapter, ordered reply/resize segments and composed
+source guard are implemented. Behavioral corrections distinguish process input
+Closed from read End/Lost and permit explicit cleanup of retained authoritative
+Exited bindings after presentation finish. Actual saturated libvterm replies,
+forced scrollbar, adapter and targeted lifecycle qualification checks pass.
+
+A prior full suite failed 32/34 at immediate native task counts after exact owned
+joins and FD cleanup. The approved Apple test boundary checks owned joins/FDs
+immediately and native baseline once at 100 ms, with failure probes; earlier
+failures remain retained. Old/new diagnostic counts do not establish causation.
+Clean final full-suite qualification and independent Task9 review are pending.
+Default desktop remains local; Task10 has not started.

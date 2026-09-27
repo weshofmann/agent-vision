@@ -60,7 +60,14 @@ class SourceGuard(unittest.TestCase):
                               env=ENV, capture_output=True, timeout=10)
     def rejected_unchanged(self):
         before = self.snapshot()
+        # Snapshot's recursive Git diff can refresh stat cache even with optional
+        # locks disabled. Compare raw bytes immediately around the guard itself,
+        # before any second diagnostic reader can refresh that cache.
+        indexes = [repo/'.git/index' for repo in (self.root, self.dep, self.nested)]
+        raw_before = [index.read_bytes() for index in indexes]
         result = self.run_guard()
+        self.assertEqual(raw_before, [index.read_bytes() for index in indexes],
+                         'guard mutated raw index bytes')
         self.assertNotEqual(result.returncode, 0, 'guard accepted modified tracked source')
         self.assertEqual(before, self.snapshot(), 'rejected fixture was mutated')
 
