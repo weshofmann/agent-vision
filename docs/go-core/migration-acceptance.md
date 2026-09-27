@@ -254,3 +254,31 @@ this passing diagnostic is neither a cause nor a shipping-Go qualification pass.
 No additional Go execution or retained Go/dependency change followed. Existing
 pyte desktop-test dependency is reused for decoded native captions; CMake supplies
 the same `.probe/tools` PYTHONPATH for the opt-in native tests.
+
+
+## Final whole-PR minor corrections
+
+The final bounded fix wave addresses Task7-R1 (known nonregular executable paths
+report deterministic `EACCES`; failed regular-file access keeps syscall errno),
+T9-R1 (resize-overflow cancellation is local presentation cancellation), and
+T10-R4 (the outer-PTY oracle uses incremental `pyte.ByteStream`). Offline proof
+compares exact cells/cursor across all 63 single-cut byte boundaries and
+byte-at-a-time input, including wide glyph columns, and replays retained positive
+and omitted-publication captions. T9-R2 remains deferred: pinned configure
+compatibility warnings do not authorize dependency changes.
+
+Code checkpoint `adfc342b6ef57d833becab997a5d2d82195d529e`: focused tests **2/2
+passed, 2.49s**; fresh default OFF build compiled without C++ warnings, retaining
+the inherited pinned libvterm CMake configure deprecation. Full default suite
+**36/37 passed, 55.41s; FAILED**: `ipc_session_reserve` rejected “peer accepted exact
+DSR/CPR as slot48 behind saturated users.” The existing local desktop test passed
+9.25s with its interaction, cleanup and outer-terminal restoration checks. No
+retry or follow-up source change was made. The new offline decoder test accounts
+for the added registration. Initial process RED source/log are retained, but its
+executable was overwritten by the next focused rebuild before archival; that
+original binary is unavailable. GREEN/final binaries were archived before tests.
+
+Both the new default qualification failure and Important T10-R1 remain unresolved;
+the shipping opt-in Go qualification remains 39/40 failed with unknown inner
+`pty.Open` cause. No Go or native heavy test was rerun in this wave. This is a
+scoped review checkpoint, not Task10 completion or operator acceptance.

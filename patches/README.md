@@ -129,3 +129,17 @@ Both native tests reuse the existing pyte desktop-fixture dependency in
 `GODEBUG=execwait=2 GOGC=1 "$CTEST" --test-dir .probe/task10-on -R '^ipc_terminal(_negative)?$' --output-on-failure`.
 Original full-Go native-start failure remains an open gate; copied diagnostics
 are separately labeled and do not replace shipping qualification.
+
+
+The offline native-oracle regression uses the same incremental `pyte.ByteStream`
+as the outer-PTY harness. With the existing desktop-test pyte installation:
+
+```sh
+PYTHONPATH="$PWD/.probe/tools" PYTHONDONTWRITEBYTECODE=1 python3 tests/ipc_terminal_decode.py
+ctest --test-dir <default-build> -R '^(core_process|ipc_terminal_decode)$' --output-on-failure
+```
+
+This offline test checks UTF-8 split boundaries and cells; it does not launch the
+Go core or establish native lifecycle qualification. Retained captures can be
+replayed with `--capture <screen.bin> 1` for a published loss caption or `0` for
+omitted publication. The inherited pinned configure deprecation is deferred.
