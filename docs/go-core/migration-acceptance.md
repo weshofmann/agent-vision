@@ -349,3 +349,22 @@ the missing completion fields from the prior failed run. No retry was performed.
 The single fresh complete OFF qualification follows this committed checkpoint;
 its result and independent scoped review remain pending. T10-R1 remains open;
 no Go/ON/native-start test or PR2 acceptance is claimed.
+
+The single fresh default-OFF qualification at code checkpoint
+`c2bd9f08c990010ff9d0fd1886c026574a7a774c` passed **42/42, 54.71s**.
+Configure/build succeeded with unchanged pinned inputs; C++ compilation emitted
+no warnings and the inherited libvterm configure deprecation remains. The default
+`desktop_pty` passed **9.30s**, including interaction, cleanup, cooked input and
+exact termios restoration. No Go/ON/native-start/heavy qualification ran.
+
+Full-OFF normal, fragmented and early completions again met strict exit0,
+systemError0, noTERM/KILL, contactNone/graceful and descriptors5/5. Its EOF
+completion was Signaled15, systemError0, termSent1, killSent0, EOFReached and
+nongraceful, with consumed13, only the real10-byte queued reply plus4086 queued
+filler, genuine Lost and no second query/reply/Overflow; workers joined and
+retained state remained accessible. These current results preserve both the
+original failed OFF qualification and the failed cleanup-oracle checkpoint as
+historical failures, without diagnosing their unreported completion fields.
+Later documentation-only commits do not change the tested code. WPR-F1 and
+WPR-F1-R1 await scoped independent review/operator disposition; T10-R1 remains a
+separate blocker and PR2 acceptance is still held. PR9 stays Draft and unmerged.
