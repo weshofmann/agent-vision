@@ -368,3 +368,64 @@ historical failures, without diagnosing their unreported completion fields.
 Later documentation-only commits do not change the tested code. WPR-F1 and
 WPR-F1-R1 await scoped independent review/operator disposition; T10-R1 remains a
 separate blocker and PR2 acceptance is still held. PR9 stays Draft and unmerged.
+
+
+### T10-R1 overnight investigation and unchanged qualification gate
+
+The [overnight envelope](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853204271)
+permits bounded independent diagnostics, documentation and dependent preparation.
+It explicitly records **WPR-F1/WPR-F1-R1 closed** and **T10-R1 open/blocking**;
+this supersedes the historical pending-disposition statements above without
+reopening the reserve fixtures. Default-OFF evidence remains the 42/42 run at
+code `c2bd9f08c990010ff9d0fd1886c026574a7a774c`; no new OFF/ON qualification
+or real-core/heavier-workload resource qualification was run this session.
+
+The completed [master-only result](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853191996)
+was used without rerunning: 32 acquisitions, one concurrent master-Open signed
+errno -6, 31 successful owned closes. Additional design 1 exercised the complete
+pinned Darwin PTY-open path using an explicitly named, isolated diagnostic copy.
+It preserved the existing Open flags, original ioctl/Syscall helper, slave
+OpenFile and sole File-owner cleanup. Instrumentation can alter scheduling;
+this is not the unchanged shipping executable.
+
+[Independent preflight](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853456008)
+closed diagnostic D1-R1 after exactly one reporting-only RED and GREEN test.
+The actual extracted helper initially lost nonnumeric error messages; the two
+expected message cases failed while exact negative-six and nil cases passed.
+The reviewed correction quotes the inner nonnumeric error while omitting the
+outer PathError path/message. All four GREEN cases passed. No PTY/ioctl/core
+operation occurred in these reporting tests, and no product code changed.
+
+The [single design 1 execution](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853484983)
+reproduced typed errno `0xfffffffffffffffa`, unsigned 18446744073709551610,
+signed -6 at master `syscall.Open`, concurrent round 2/attempt 6. It stopped at
+48 acquisitions after joined normal cleanup: 47 successful pairs, 94 individually
+recorded nil slave/master File.Close results, 141 same-call ioctl tuples with
+raw errno 0. The failed master Open returned before file ownership. Selected
+test deliberately FAIL after 0.84s; process exit1, supervised 1.297992125s, no timeout,
+forced termination, stderr or race report. The single offline build succeeded.
+
+Approved source bundle SHA256:
+`1291eb8f808ae1282616908ec1fe4b22e6e7f6fcdfe4f6427580936f8972c492`.
+Preserved race executable SHA256:
+`2418303dfdde928f699e738cd54b3c1edcd9626a5541bfc267bd6f5516d593b7`.
+Metadata reports qualified Go1.27.0, CGO1, race, Darwin/arm64. Source/binary
+identities, exact commands and distinct raw results remain durably preserved.
+[Independent result audit](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5853493435)
+reconciled all records and found no unresolved probe-owned cleanup. This is
+neither a host FD baseline nor proof of kernel-internal cleanup.
+
+Historical R14 stage2 marks the entire `pty.Open()` call, not its name ioctl;
+its inner operation remains unknown. A proposed name-ioctl experiment based on
+the mistaken boundary was stopped during source preparation, before any build
+or run. The second additional diagnostic allowance remains unused. No further
+native experiment is queued without a new discriminating question.
+
+The matching master boundary does not establish a running-kernel branch,
+underlying cause, retained correction, retry/serialization policy or restored
+shipping qualification. **T10-R1 remains open**; broad OFF/ON reruns and retained
+Tasks 11–12 cutover remain gated. The heavier frontend/core kernel-thread growth
+question remains pending; no lazy-initialization explanation is assumed.
+The default local C++ desktop and lifecycle coverage remain intact. Task 13
+removal, manual equivalence acceptance and PR acceptance are not authorized by
+these observations.
