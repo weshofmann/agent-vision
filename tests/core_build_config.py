@@ -20,6 +20,9 @@ def main():
         shutil.copytree(root / 'core', source / 'core')
         (source / 'cmake').mkdir()
         shutil.copy(root / 'cmake/GoCore.cmake', source / 'cmake/GoCore.cmake')
+        shutil.copy(root / 'cmake/verify_creack_source.py', source / 'cmake/verify_creack_source.py')
+        (source / 'patches').mkdir()
+        shutil.copy(root / 'patches/creack-pty-darwin-master-boundary.patch', source / 'patches')
         (source / 'third_party').mkdir()
         shutil.copytree(root / 'third_party/notices', source / 'third_party/notices')
         (source / '.probe').mkdir()
@@ -50,6 +53,28 @@ def main():
         target.write_text(target.read_text().replace('invalid startup arguments', 'synthetic rebuild probe'))
         subprocess.run([args.cmake, '--build', str(build)], check=True, capture_output=True)
         assert binary.stat().st_mtime_ns > before, 'Go source edit did not rebuild sibling'
+        # Reviewed effective bytes stay constant: touching each guarded dependency
+        # proves its rebuild edge without fabricating an accepted source mutation.
+        for relative in ('core/third_party/creack-pty/pty_darwin.go',
+                         'core/third_party/creack-pty/go.mod',
+                         'core/third_party/creack-pty.pristine.json',
+                         'core/third_party/creack-pty.downstream.json',
+                         'patches/creack-pty-darwin-master-boundary.patch',
+                         'cmake/verify_creack_source.py'):
+            before = binary.stat().st_mtime_ns
+            time.sleep(1.05)
+            (source / relative).touch()
+            subprocess.run([args.cmake, '--build', str(build)], check=True, capture_output=True)
+            assert binary.stat().st_mtime_ns > before, relative + ' did not rebuild'
+        for relative in ('core/third_party/creack-pty/unexpected.go',
+                         'core/third_party/creack-pty/.unexpected'):
+            unexpected = source / relative
+            unexpected.write_text('package pty\n')
+            before = binary.stat().st_mtime_ns
+            result = subprocess.run([args.cmake, '--build', str(build)], capture_output=True)
+            assert result.returncode != 0, 'unexpected replacement addition accepted'
+            assert binary.stat().st_mtime_ns == before, 'built before integrity rejection'
+            unexpected.unlink()
         assert (build / 'licenses/creack-pty.LICENSE').read_bytes() == (root / 'third_party/notices/creack-pty.LICENSE').read_bytes()
         print('PASS: opt-in/off, absolute pinned Go, target rejection, dependency rebuild, notices')
 

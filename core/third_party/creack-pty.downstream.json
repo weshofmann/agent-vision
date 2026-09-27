@@ -1,0 +1,8 @@
+{
+  "changed_files": {
+    "pty_darwin.go": "2ec9eb642c01fed73e76957e49fa639d2a6895fbf906be63f7269c3ae30a2d03",
+    "pty_darwin_boundary_test.go": "d550de10b552257cee23870cfd0a2f912090ba33cadffa266a9985be5ee7e945"
+  },
+  "patch_sha256": "be06ef3fca0e1820c6d2b9c156e23af46b4b3f34cf2d975e7e79c43f1c5c0da4",
+  "removed_files": []
+}

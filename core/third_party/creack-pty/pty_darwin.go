@@ -5,6 +5,7 @@ package pty
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
@@ -23,24 +24,45 @@ func open() (pty, tty *os.File, err error) {
 		}
 	}()
 
-	sname, err := ptsname(p)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := grantpt(p); err != nil {
-		return nil, nil, err
-	}
-
-	if err := unlockpt(p); err != nil {
-		return nil, nil, err
-	}
-
-	t, err := os.OpenFile(sname, os.O_RDWR|syscall.O_NOCTTY, 0)
+	t, err := OpenSlaveFromMaster(p)
 	if err != nil {
 		return nil, nil, err
 	}
 	return p, t, nil
+}
+
+// OpenSlaveFromMaster borrows master for the Darwin post-master sequence.
+// It never closes or reopens master. Any returned slave belongs to the caller,
+// including one returned with an error. There is no acquisition retry here.
+func OpenSlaveFromMaster(master *os.File) (*os.File, error) {
+	return openSlaveFromMaster(master, slaveOpenOps{ptsname, grantpt, unlockpt, os.OpenFile})
+}
+
+type slaveOpenOps struct {
+	name          func(*os.File) (string, error)
+	grant, unlock func(*os.File) error
+	open          func(string, int, os.FileMode) (*os.File, error)
+}
+
+func openSlaveFromMaster(master *os.File, ops slaveOpenOps) (*os.File, error) {
+	if master == nil {
+		return nil, errors.New("nil borrowed master")
+	}
+	name, err := ops.name(master)
+	if err != nil {
+		return nil, fmt.Errorf("pty name: %w", err)
+	}
+	if err = ops.grant(master); err != nil {
+		return nil, fmt.Errorf("pty grant: %w", err)
+	}
+	if err = ops.unlock(master); err != nil {
+		return nil, fmt.Errorf("pty unlock: %w", err)
+	}
+	slave, err := ops.open(name, os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		return slave, fmt.Errorf("pty slave open: %w", err)
+	}
+	return slave, nil
 }
 
 func ptsname(f *os.File) (string, error) {
