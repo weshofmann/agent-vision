@@ -3,9 +3,10 @@
 Authority: [operator approval and assignment](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5858626978)
 at design head `79c30fd8dc2bd13036b1eef96903c03254b22808`.
 This implements RD-D1 through RD-D5 of the [approved design](darwin-master-open-recovery-design.md).
-**Current boundary:** final correction cycle 2 under [independent re-review](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859242445).
-The original comparison and partial qualification results below are preserved;
-amended native fixtures and resumed qualification remain held for re-review.
+**Current boundary:** authorized qualification at code `40ab6e62685e5aac4f5c08c618ae00b7aea1ff40` is complete after
+[independent correction-cycle clearance](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859335377).
+Final independent review of recovery and PR #9 client interactions remains pending.
+Historical failures, correction boundaries and original evidence limits are preserved below.
 T10-R1 remains open. All PRs remain Draft/unmerged; local C++ stays the default,
 PR #10 acceptance is unchanged and PR #11 stays frozen.
 
@@ -248,7 +249,67 @@ ownership faults. The prior returned-owner-only arrangement failed each case wit
 zero known-child cleanup calls; the correction passes, joins the synthetic sole
 reapers and preserves both cleanup errors. Evidence and actual executed injected
 binaries are retained in the ignored implementation ledger's `cycle-2/` directory.
-Amended native execution remains held for independent pre-native re-review. This
-uses the final authorized correction allowance; unresolved findings return to the
-operator. The original comparison and nested observations retain their original
+At that checkpoint, amended native execution remained held for independent
+pre-native re-review. This used the final authorized correction allowance;
+unresolved findings return to the operator. The original comparison and nested observations retain their original
 SHA and binary-identity limits; they are not repeated or relabeled as cycle-2 runs.
+
+## Completed qualification at 40ab6e6; final review pending
+
+The coordinator executed the authorized sequence once after independent clearance,
+with comparison disabled and qualified Go 1.27.0, CGO/race, readonly modules and
+unchanged watchdogs. All commands, selected environment, exact source inputs,
+printed WORK directories, actual execution binaries and hashes remain in durable
+ignored evidence at `<worktree>/.probe/darwin-recovery-coordinator/qualification-40ab6e6/`.
+This later documentation checkpoint does not change the tested code SHA.
+
+| Qualification at `40ab6e62685e5aac4f5c08c618ae00b7aea1ff40` | Observed result |
+| --- | --- |
+| Retained direct `go test -mod=readonly -race -work -count=1 -v ./... -timeout=120s` | PASS, 25.292 s supervised; all four startup-failure FD baselines, causal cancellation/exact owner, job-control and native-sixteen assertions reached |
+| Fresh default-OFF configure/build and full CTest | PASS, 42/42, 54.385 s |
+| Fresh opt-in-ON configure, clean-first build and full CTest | PASS, 48/48, 116.713 s; includes retained `core_go` whole-module race |
+| Three additional fresh actual-core workloads: normal, normal, direct-core loss | PASS, 7.689 / 8.172 / 8.251 s; 51 creations and 48 heavy A cycles total |
+
+Direct whole-module output SHA256 is
+`eda0af25c68fc5921b0874f063032de3987d676f23b5240a53807d3557a3a134`.
+Both direct and CTest Go runs retain their actual four test executables; the CTest
+receipt/WORK are at `<worktree>/.probe/go-test-evidence/run-1790539571123001000/`.
+OFF/ON execution binaries were archived before ON execution and while OFF inputs
+remained untouched. C++ inputs include the exact composed tvterm source, tvision,
+the vterm wrapper and a supplementary archive/hash map of all 76 actual nested
+libvterm source files. The early wrapper's parent-head label does not identify
+the nested libvterm revision; the supplementary record supplies that identity.
+Dependency pins remain unchanged.
+
+All 48 Credit completion records report raw/pending/ticket zero. All 51 worker
+records join, covering each of 16 A cycles plus final B in each invocation.
+The 195 resource records and all per-cycle stages remain retained. Exact MiB,
+consumed/emulated/published equality and final sequence equality are executed
+fixture assertions/stage evidence, not numerical counter dumps. An auxiliary
+summary initially assumed one worker record per invocation; it was corrected to
+17 without a native rerun or test change, with the analysis failure preserved.
+
+Quiet frontend threads are eight throughout. Quiet core threads are 14 for four
+cycles then 15 for twelve in normal 1; 14 for two then 15 for fourteen in normal 2;
+and 15 for two then 17 for fourteen in loss. These runs show finite plateaus after
+cycles 4/2/2 and different fresh-process plateaus of 15/15/17. All-stage frontend
+threads range 6–10; core threads range 1–15/15/17. At quiet stages, frontend/core
+FDs are 14/11 and direct children 1/1 with B alive; at most two core shell children
+are live. These observations establish neither lazy initialization, a universal
+thread bound nor the cause of historical growth.
+
+Normal completion reports contact/core/value `0/0/0`, graceful 1. Intentional
+direct-core loss reports `1/1/9`, graceful 0. Automated UI restoration and cooked
+input oracles pass in all three invocations. This is not manual operator UI
+acceptance or a guarantee about all host descendants.
+
+The original f4730d5 whole-module failure and broad/nested missing executed-binary
+identities remain historical limitations. The single comparison and nested pass
+carry forward only under their original SHA and unchanged-source map; neither
+was repeated, and no extra standalone native-sixteen run occurred. Recovery
+policy efficacy is not inferred from the comparison's absence of failures.
+Final independent Astra/high review must assess the complete recovery and PR #9
+client interactions before operator disposition. T10-R1 stays open; PR2 acceptance
+and Tasks 11–12 cutover remain gated. Local C++ stays default, PR #11 frozen and
+all PRs Draft/unmerged. No runtime work or autonomous code correction remains
+authorized by this checkpoint.
