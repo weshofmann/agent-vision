@@ -16,5 +16,7 @@ A prior full suite failed 32/34 at immediate native task counts after exact owne
 joins and FD cleanup. The approved Apple test boundary checks owned joins/FDs
 immediately and native baseline once at 100 ms, with failure probes; earlier
 failures remain retained. Old/new diagnostic counts do not establish causation.
-Clean final full-suite qualification and independent Task9 review are pending.
+Clean exact-source build and all 35 CTests pass, including the local desktop.
+The exact tested commit is `669d21864fb54ecb25b41c026974ca7f03c12906`;
+independent Task9 review remains pending.
 Default desktop remains local; Task10 has not started.
