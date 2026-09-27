@@ -105,3 +105,10 @@ error, never a successful Shutdown Ack. A slow writer or missing output credit
 fails contact after the named two-second policy. Sessions are ordinary local
 processes, with inherited environment/cwd and no sandbox or descendant-isolation
 claim. The C++ adapter and desktop cutover remain separate review boundaries.
+
+## Future architecture references
+
+[Prior-art research and technology watch](docs/architecture/prior-art-and-future-runtime.md)
+preserves Issue #7's hypotheses and ranked opportunities. The
+[multi-node and attachment direction](docs/architecture/multi-node-and-attachment-direction.md)
+records agreed future requirements; detach/reattach is not implemented by the current core.
