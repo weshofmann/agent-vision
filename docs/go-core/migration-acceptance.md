@@ -2,7 +2,10 @@
 
 ## PR2 scope and gate
 
-Status: initial intent checkpoint; implementation and qualification pending.
+Status: Tasks 7–9 have passed their independent task gates. Task 10 begins at
+`875fb1277fc53849d078921d819ca48f34b98e4c`; real-core presentation and complete
+qualification are pending. The [Task 9 gate closure](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5851235133)
+authorizes this bounded harness milestone.
 Base main: `3bc0b00d691739f3b472f3e0509f2db4c0ecf850`, the merged PR1.
 [PR1 operator acceptance](https://github.com/weshofmann/agent-vision/pull/8#issuecomment-5849812647)
 authorizes the next boundary when separately assigned. This PR executes only
@@ -17,9 +20,9 @@ or platform expansion is part of this PR.
 
 | Task | Deliverable | Required evidence | Current gate |
 | --- | --- | --- | --- |
-| 7 | C++ shared-corpus AVCP codec and core-child owner | Every golden frame, bounded malformed parsing, native FD3/exec/reap/escalation | Pending |
-| 8 | Shared connection and bounded per-session endpoints | Fragmentation, partial I/O, control/reply reserves, isolated cancellation, consumed-credit and staged final status | Pending |
-| 9 | tvterm transport seam and IPC adapter | Owned payloads, real DSR/CPR, silent resize, lock callbacks, final flush, local selection and default local lifecycle | Pending |
+| 7 | C++ shared-corpus AVCP codec and core-child owner | Every golden frame, bounded malformed parsing, native FD3/exec/reap/escalation | Independently gated |
+| 8 | Shared connection and bounded per-session endpoints | Fragmentation, partial I/O, control/reply reserves, isolated cancellation, consumed-credit and staged final status | Independently gated |
+| 9 | tvterm transport seam and IPC adapter | Owned payloads, real DSR/CPR, silent resize, lock callbacks, final flush, local selection and default local lifecycle | Independently gated |
 | 10 | Opt-in real-core presentation harness | Two sessions, actual emulator/view locks, loss/close retention, repeated heavy resource observations, complete default and opt-in suites | Pending |
 
 Task checkpoints receive independent specification and quality review.
