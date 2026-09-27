@@ -83,7 +83,7 @@ fixture it produced the expected RED because session B's `Bxy` output was
 missing; after the fixture correction it passed alongside the existing streams
 and output-fragments cases.
 
-## Task 12 sibling packaging specification
+## Task 12 sibling packaging specification and historical preparation
 
 | Case | Acceptance requirement |
 | --- | --- |
@@ -95,10 +95,12 @@ and output-fragments cases.
 | Install | Both binaries in bin and complete notices under share/agentvision/licenses |
 | Source rebuild | Preserve exact Go version, readonly module pins, trimpath and source dependencies |
 
-Current sibling installation/default cutover is not implemented. Preparatory
+At the historical preparation checkpoint, sibling installation/default cutover
+was not implemented. Current Task 12 installed-product evidence is recorded in
+[migration acceptance](migration-acceptance.md#task-12-sibling-package-checkpoint). Preparatory
 fake-sibling tests must be labeled as seam tests, not installed-product evidence.
 No production core or extra native PTY campaign is needed to prepare these cases.
-The package_siblings seam case copies the existing core_process_test into a
+The historical package_siblings seam case copied the existing core_process_test into a
 temporary path containing spaces and exercises adjacent-sibling lookup from an
 unrelated current directory with a runnable PATH impostor, then checks missing
 and nonexecutable adjacent siblings and reaps only its direct synthetic child.
@@ -156,6 +158,7 @@ they do not satisfy PR2 default qualification or close the Task 10 gate.
 
 No manual result is inferred from synthetic tests. Keep the local lifecycle
 implementation and its regression coverage throughout preparation and cutover
-candidate work. Main and PR #9 keep their existing desktop default. Integrate any
+candidate work. The accepted parent/main keeps its existing local desktop default; this
+cutover feature branch now requires the sibling core. Integrate any
 later parent fix by ordinary reviewed merge into this candidate, with affected
 evidence invalidated and rechecked; never rebase/force-push an active review target.

@@ -62,6 +62,7 @@ class Desktop:
             (folder/name).unlink(missing_ok=True)
         self.master, self.slave = pty.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+        self.outer_before = termios.tcgetattr(self.slave)
         self.screen = Screen(120, 40)
         self.stream = pyte.ByteStream(self.screen)
         self.raw = bytearray()
@@ -162,6 +163,7 @@ class Desktop:
         assert result['app_wait_status'] == expected_exit << 8
         assert result['cooked_input_restored'] and result['termios_restored_after_input']
         assert b'\x1b[?1049h' in self.raw and b'\x1b[?1049l' in self.raw
+        assert not self.screen.cursor.hidden, 'outer cursor not restored'
         deadline = time.monotonic()+2
         while time.monotonic()<deadline:
             waited, status = os.waitpid(self.pid, os.WNOHANG)
@@ -366,8 +368,18 @@ def core_loss(binary, folder, during_modal=False, continuous=False):
 def loss_modal(binary, folder): return core_loss(binary, folder, during_modal=True)
 def loss_continuous(binary, folder): return core_loss(binary, folder, continuous=True)
 
-def stopped_quit(binary, folder):
-    d = Desktop(binary, folder)
+def restored_termios(actual, before):
+    # Darwin sets PENDIN when cooked processing resumes. It describes pending
+    # input retyping, not a terminal mode; the supervisor's cooked input read
+    # clears it and restore() still compares every field exactly after that read.
+    actual = list(actual)
+    expected = list(before)
+    actual[3] &= ~termios.PENDIN
+    expected[3] &= ~termios.PENDIN
+    return actual == expected
+
+def stopped_quit(binary, folder, extra_env=None):
+    d = Desktop(binary, folder, extra_env=extra_env)
     try:
         d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
                'initial Go windows missing')
@@ -375,8 +387,24 @@ def stopped_quit(binary, folder):
         os.kill(core_pid, signal.SIGSTOP)
         d.menu('q'); d.wait(lambda: d.contains('Terminate 2 live'), 'stopped core quit did not confirm')
         d.confirm(True)
-        d.wait(lambda: b'\x1b[?1049l' in d.raw, 'outer terminal was not restored before escalation', timeout=1)
-        assert not d.absent(core_pid), 'test did not observe restoration before the stopped core was killed'
+        def outer_restored():
+            actual = termios.tcgetattr(d.slave)
+            observation = {'before': d.outer_before, 'actual': actual,
+                           'alternate_screen_left': b'\x1b[?1049l' in d.raw,
+                           'cursor_visible': not d.screen.cursor.hidden,
+                           'stopped_core_state': subprocess.run(
+                               ['/bin/ps', '-o', 'state=', '-p', str(core_pid)],
+                               capture_output=True, text=True, check=True).stdout.strip()}
+            (folder/'outer-restoration-observation.json').write_text(
+                json.dumps(observation, default=lambda value: value.hex())+'\n')
+            return (observation['alternate_screen_left'] and observation['cursor_visible'] and
+                    restored_termios(actual, d.outer_before))
+        d.wait(outer_restored, 'outer terminal was not restored before escalation', timeout=1)
+        state = subprocess.run(['/bin/ps', '-o', 'state=', '-p', str(core_pid)],
+                               capture_output=True, text=True, check=True).stdout.strip()
+        assert 'T' in state, 'test did not observe restoration while the owned core was still stopped'
+        assert restored_termios(termios.tcgetattr(d.slave), d.outer_before), 'outer termios not restored before escalation'
+        assert not d.screen.cursor.hidden, 'outer cursor not restored before escalation'
         restored = d.restore()
         assert d.absent(core_pid)
         assert b'cleanup was not graceful' in d.raw, 'forced cleanup was reported as graceful'

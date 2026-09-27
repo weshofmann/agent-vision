@@ -1,6 +1,8 @@
-# PR1 keeps the local C++ desktop default. This executable is an independent
-# inherited-stream backend, not a frontend cutover or installed service.
-option(AGENTVISION_BUILD_CORE "Build the independently tested Go core" OFF)
+# The shipping desktop requires its frontend-spawned sibling core.
+option(AGENTVISION_BUILD_CORE "Build the required Go session core" ON)
+if(NOT AGENTVISION_BUILD_CORE)
+    message(FATAL_ERROR "The migrated desktop requires AGENTVISION_BUILD_CORE=ON; local lifecycle code is retained only for standalone tests")
+endif()
 set(AGENTVISION_GO_EXECUTABLE "" CACHE FILEPATH "Absolute qualified Go 1.27.0 executable")
 set(_av_core_root "${CMAKE_CURRENT_LIST_DIR}/..")
 if(AGENTVISION_BUILD_CORE)
@@ -51,12 +53,15 @@ function(agentvision_configure_core)
             -o "${binary}" ./cmd/agentvision-core
         WORKING_DIRECTORY "${core}"
         DEPENDS core-source-guard ${go_sources} ${creack_inputs} "${core}/go.mod" "${core}/go.sum"
-        COMMENT "Building pinned Go inherited-stream core" VERBATIM)
+        COMMENT "Building pinned Go session core" VERBATIM)
     add_custom_target(agentvision-core-build ALL DEPENDS "${binary}")
+    install(PROGRAMS "${binary}" DESTINATION bin)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
     foreach(notice IN ITEMS creack-pty.LICENSE Go.LICENSE Go.PATENTS)
         configure_file("${_av_core_root}/third_party/notices/${notice}"
             "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
+        install(FILES "${_av_core_root}/third_party/notices/${notice}"
+            DESTINATION share/agentvision/licenses)
     endforeach()
     if(BUILD_TESTING)
         add_test(NAME core_replacement_guard COMMAND "${Python3_EXECUTABLE}"

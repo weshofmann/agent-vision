@@ -1,6 +1,87 @@
 # Go core migration acceptance
 
-## PR2 scope and gate
+## Current parent acceptance and cutover status
+
+The operator [accepted PR #9 and closed T10-R1](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859566997)
+for the bounded mitigation and qualified Darwin arm64 checkpoint at accepted
+head `9e4c5fb954401be43e3289ae1a4d12d90844338e`, runtime-qualified code
+`40ab6e62685e5aac4f5c08c618ae00b7aea1ff40`. Parent integration is main
+`9758954a7a6d0ff53848f460c6f7e5428375320b` (same tree as the accepted head).
+The [continuation](https://github.com/weshofmann/agent-vision/pull/11#issuecomment-5859569996)
+authorizes Tasks 11–12 on the existing cutover branch; PR #11 remains Draft.
+Task 11 passed its [fresh independent scoped gate](https://github.com/weshofmann/agent-vision/pull/11#issuecomment-5860047264)
+at `af8a2ec55c5c723ac05da5c530c2b68b6a758d35`. The cutover shipping frontend
+uses only IPC; retained local lifecycle code/patches/tests await a separate
+Task 13 authorization after manual operator equivalence acceptance.
+
+T10-R1 closure does not establish native retry efficacy or the historical kernel
+cause. The native comparison observed no retries. The accepted finite heavier
+runs reported quiet core thread plateaus 15/15/17, with recorded FD/direct-child
+baselines recovered; they do not establish lazy initialization or a universal
+resource bound. Historical failures and missing historical executed-binary
+identities below remain disclosed. Earlier open/pending status statements are
+historical observations, superseded by the exact operator disposition above.
+
+## Task 12 sibling package checkpoint
+
+The candidate defaults the core ON and rejects OFF, preserving exactly Go
+1.27.0 darwin/arm64, readonly module builds, trimpath, source-integrity guards
+and source/module/patch rebuild edges. CMake installs the shipping frontend and
+core together in `bin`, with six complete notices and this repository's notice
+summary in `share/agentvision/licenses`. No project license or redistribution
+clearance is selected.
+
+The package regression first failed because CMake install omitted the frontend.
+The default/OFF regression first failed because OFF was accepted. After the
+rules were added, the actual installed and relocated package (path with spaces)
+ran two distinct Go-owned sessions from an unrelated cwd with a runnable PATH
+impostor. Missing/nonexecutable siblings and literal incompatible/malformed
+HelloAck peers produced one startup diagnostic with no PATH execution or local
+fallback; rejected direct owned peers were absent after frontend exit. A stopped
+real core restored the alternate screen, cursor and terminal configuration
+before core escalation, then was reaped with a forced-cleanup diagnostic.
+Cooked input and exact post-input termios readback were restored in every case.
+These observations qualify same-host relocation, not universal portability.
+
+Two initial stronger stopped-core oracle attempts failed and remain retained.
+Investigation found only Darwin's `PENDIN` transient pending-input state differed
+from the prelaunch baseline. The oracle excludes only that state bit before
+escalation, while comparing every configuration/control field and requiring
+cursor visibility plus alternate-screen restoration while the stopped core is
+still alive. Deterministic negative tests reject actual flag, speed and control
+character changes; the cooked-input roundtrip still requires exact unmasked
+termios equality. The [pinned Apple tty source](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/bsd/kern/tty.c)
+sets pending-input state when canonical processing resumes and clears it during
+input handling; this is a mechanism reference, not identification of the running
+kernel. The instrumented investigation script was retained but lacked its own
+contemporaneous pre-run hash; subsequent wrappers archive executed scripts.
+
+Targeted verification used the existing Debug build with successful configure
+and build gates: `core_build_config` passed required-default/OFF/tool/target,
+source-integrity and source/module/patch rebuild checks; the amended covering
+CTest selection `core_process|package_siblings|desktop_termios_oracle|desktop_pty`
+passed 4/4 (36.97 s, including 17 desktop scenarios). After the peer audit was
+strengthened to require the intended literal reply actually be sent,
+`package_siblings` passed again (6.69 s). An earlier 4/5 covering result included
+one redundant direct seam registration failure: that submode requires its
+isolated copied executable, already exercised by `core_process`. The redundant
+registration was removed; the failed attempt remains retained. These are
+covering checks, not a fresh whole qualification.
+
+Current fresh whole qualification, independent packaging/whole-PR review and
+operator acceptance will be recorded separately. All manual checks below remain
+unchecked; automated checks do not qualify native UX or authorize Task 13.
+
+- [ ] Focus/z-order/Ctrl-B menu and keyboard/mouse move, resize, maximize.
+- [ ] Independent A/B input routing and stty rows/columns after resize.
+- [ ] Finite scrollback/selection followed by input and UI interaction.
+- [ ] Unicode/raw escape/DSR response behavior.
+- [ ] Ctrl-C, Ctrl-Z and fg under Go shell ownership.
+- [ ] Close/quit cancellation and confirmation; natural exit/status retention.
+- [ ] Stopped/crashed core behavior and outer terminal modes/cursor restoration.
+- [ ] Operator equivalent-evidence/manual acceptance before lifecycle removal.
+
+## Historical PR2 scope and gate
 
 Status: Tasks 7–9 have passed their independent task gates. Task 10 implementation
 and completed native qualification are submitted for final independent review;

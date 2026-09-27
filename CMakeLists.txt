@@ -46,8 +46,13 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
 foreach(notice IN ITEMS tvterm.COPYRIGHT tvision.COPYRIGHT libvterm.LICENSE)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
         "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
+        DESTINATION share/agentvision/licenses)
 endforeach()
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    DESTINATION share/agentvision/licenses)
 add_executable(agentvision src/main.cpp src/app.cpp src/window.cpp)
+install(TARGETS agentvision RUNTIME DESTINATION bin)
 target_link_libraries(agentvision PRIVATE agentvision-ipc-session)
 target_compile_options(agentvision PRIVATE -Wall -Wextra)
 add_library(agentvision-core-client STATIC src/core_protocol.cpp src/core_process.cpp src/core_connection.cpp)
@@ -166,8 +171,10 @@ if(BUILD_TESTING)
         add_test(NAME core_process COMMAND core_process_test)
         set_tests_properties(core_process PROPERTIES TIMEOUT 20)
         add_test(NAME package_siblings COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings.py" $<TARGET_FILE:core_process_test>)
-        set_tests_properties(package_siblings PROPERTIES TIMEOUT 20)
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings.py" "${CMAKE_COMMAND}"
+            "${CMAKE_CURRENT_BINARY_DIR}" --output "${CMAKE_CURRENT_BINARY_DIR}/package-evidence")
+        set_tests_properties(package_siblings PROPERTIES TIMEOUT 60
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
         add_test(NAME ipc_terminal_decode COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_decode.py")
         set_tests_properties(ipc_terminal_decode PROPERTIES TIMEOUT 30
@@ -205,6 +212,10 @@ if(BUILD_TESTING)
     endforeach()
     set_tests_properties(lifecycle PROPERTIES TIMEOUT 20)
     if(APPLE)
+        add_test(NAME desktop_termios_oracle COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_termios_test.py")
+        set_tests_properties(desktop_termios_oracle PROPERTIES TIMEOUT 10
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
         add_test(NAME desktop_pty COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_pty.py" $<TARGET_FILE:agentvision>
             --output "${CMAKE_CURRENT_BINARY_DIR}/desktop-evidence")

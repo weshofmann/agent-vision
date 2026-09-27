@@ -10,14 +10,16 @@ This inventory is not legal redistribution clearance.
 | magiblot/libvterm fork | `62b27d1db0c49eed55936a1bfa35102be91afe42` | `third_party/notices/libvterm.LICENSE` (MIT) |
 
 CMake fetches tvterm and recursively checks out its selected submodules, verifies
-all three HEADs, and applies only the [downstream patch](patches/README.md).
+all three HEADs, and applies the [downstream patches](patches/README.md).
 Generic system libvterm is not equivalent to this callback-extended fork.
 Fetched sources retain their original notices; checked-in copies are byte-identical
-to the pinned originals and copied to `build/licenses` beside the executable.
+to the pinned originals and copied to `build/licenses`. CMake installs the
+frontend and required Go core as siblings in `bin`, and all six complete notice
+files plus this summary under `share/agentvision/licenses`.
 The platform ncurses, libutil and pthread libraries are linked through upstream's
 existing build discovery. Consult their platform-distribution notices as well.
 
-The opt-in independent Go core additionally uses:
+The required frontend-spawned Go core additionally uses:
 
 | Component | Qualified revision | Retained notice |
 | --- | --- | --- |
@@ -27,8 +29,8 @@ The opt-in independent Go core additionally uses:
 The Go standard-library dependency closure includes its vendored
 `golang.org/x/net/dns/dnsmessage`; the qualified distribution's complete x/net
 LICENSE and PATENTS are byte-identical to the retained Go notices. The core has
-no additional module dependencies. CMake copies these complete notices only for
-the opt-in build; it does not imply redistribution clearance for AgentVision.
+no additional module dependencies. CMake copies and installs these complete notices for the required sibling
+package; it does not imply redistribution clearance for AgentVision.
 
 The complete creack/pty module source is retained under
 `core/third_party/creack-pty`, with the MIT notice unchanged. The pristine archive
