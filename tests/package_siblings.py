@@ -86,6 +86,7 @@ def rejection(package, folder, env, mode):
     sibling = package/'bin/agentvision-core'
     audit = folder/'peer-pid.txt'
     folder.mkdir(parents=True, exist_ok=True)
+    audit.unlink(missing_ok=True)  # A prior run cannot qualify this peer.
     saved = sibling.read_bytes()
     try:
         if mode == 'missing': sibling.unlink()
@@ -99,7 +100,7 @@ def rejection(package, folder, env, mode):
             assert b'Terminal A [live]' not in d.raw and b'Terminal B [live]' not in d.raw
             assert not (folder.parent/'path-executed').exists(), 'PATH core impostor executed'
             if mode in ('version', 'malformed'):
-                assert audit.exists(), 'adjacent peer was not actually executed'
+                assert audit.exists(), 'current adjacent peer audit was not recorded'
                 peer = json.loads(audit.read_text())
                 assert peer['hello_checked'] and peer['reply_sent'] and peer['mode'] == mode, 'intended rejection frame was not sent'
                 assert d.absent(peer['pid']), 'owned rejected peer was not reaped'

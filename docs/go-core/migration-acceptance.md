@@ -38,18 +38,22 @@ ran two distinct Go-owned sessions from an unrelated cwd with a runnable PATH
 impostor. Missing/nonexecutable siblings and literal incompatible/malformed
 HelloAck peers produced one startup diagnostic with no PATH execution or local
 fallback; rejected direct owned peers were absent after frontend exit. A stopped
-real core restored the alternate screen, cursor and terminal configuration
-before core escalation, then was reaped with a forced-cleanup diagnostic.
+real core was observed with restored alternate screen, cursor and terminal
+configuration while it remained stopped, then was reaped with a
+forced-cleanup diagnostic.
 Cooked input and exact post-input termios readback were restored in every case.
 These observations qualify same-host relocation, not universal portability.
 
 Two initial stronger stopped-core oracle attempts failed and remain retained.
 Investigation found only Darwin's `PENDIN` transient pending-input state differed
-from the prelaunch baseline. The oracle excludes only that state bit before
-escalation, while comparing every configuration/control field and requiring
-cursor visibility plus alternate-screen restoration while the stopped core is
-still alive. Deterministic negative tests reject actual flag, speed and control
-character changes; the cooked-input roundtrip still requires exact unmasked
+from the prelaunch baseline. The oracle excludes only that state bit in its stopped-core observation,
+while comparing every configuration/control field and requiring cursor visibility
+plus alternate-screen restoration while the core remains stopped. Stopped state
+alone cannot prove TERM was not already pending. The unchanged lifecycle source
+orders restoration and its acknowledgement before requestStop/TERM; that
+ordering conclusion is source-backed, separate from the live observation.
+Deterministic negative tests reject actual flag, speed and control character
+changes; the cooked-input roundtrip still requires exact unmasked
 termios equality. The [pinned Apple tty source](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/bsd/kern/tty.c)
 sets pending-input state when canonical processing resumes and clears it during
 input handling; this is a mechanism reference, not identification of the running
@@ -68,8 +72,28 @@ isolated copied executable, already exercised by `core_process`. The redundant
 registration was removed; the failed attempt remains retained. These are
 covering checks, not a fresh whole qualification.
 
-Current fresh whole qualification, independent packaging/whole-PR review and
-operator acceptance will be recorded separately. All manual checks below remain
+Controller fresh qualification at published `08c70cba4f0381a2be2ced4550209c2ece4f029e`:
+Debug default-ON configure PASS 2.409 s, build PASS 10.872 s, full sequential
+CTest 59/59 PASS 149.20 s. This included actual retained Go race/PTY execution
+with four executed test binaries, installed/relocated siblings, all 17 desktop
+scenarios and standalone old lifecycle tests. The two protocol fuzzers passed
+30 s each: FuzzReadFrame 490,109 executions and FuzzDecode 516,712 executions.
+The serialized reaper passed ten 50-cycle repeats (500 measured cycles plus ten
+warm-ups); each repeat returned to FD baseline 4 and goroutine baseline 2.
+The inherited upstream libvterm CMake deprecation warning remains. These
+results are attributed to `08c70cb` only; the later test/doc correction has
+its own focused verification and must not be described as a fresh whole rerun.
+All evidence remains under private ignored qualification storage.
+
+Independent [Task 12 review](https://github.com/weshofmann/agent-vision/pull/11#issuecomment-5860276971)
+found T12-R1: a repeated package case could accept an old successful peer audit
+if the new synthetic peer exited before writing. The bounded regression first
+reproduced this false pass. The test now unlinks the case audit before launch and
+requires the current peer to create a valid Hello/reply-sent record; the real
+installed package matrix remains a separate covering check. T12-R2 qualifies the
+stopped-core observation and the separate source-backed ordering claim above.
+Scoped re-review of this correction and independent whole-PR review are pending.
+Operator acceptance remains separate. All manual checks below remain
 unchecked; automated checks do not qualify native UX or authorize Task 13.
 
 - [ ] Focus/z-order/Ctrl-B menu and keyboard/mouse move, resize, maximize.

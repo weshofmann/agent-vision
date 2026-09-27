@@ -175,6 +175,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_BINARY_DIR}" --output "${CMAKE_CURRENT_BINARY_DIR}/package-evidence")
         set_tests_properties(package_siblings PROPERTIES TIMEOUT 60
             ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
+        add_test(NAME package_siblings_audit COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings_audit_test.py"
+            $<TARGET_FILE:agentvision> "${CMAKE_CURRENT_BINARY_DIR}/agentvision-core"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/package-audit-evidence")
+        set_tests_properties(package_siblings_audit PROPERTIES TIMEOUT 20
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
         add_test(NAME ipc_terminal_decode COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_decode.py")
         set_tests_properties(ipc_terminal_decode PROPERTIES TIMEOUT 30

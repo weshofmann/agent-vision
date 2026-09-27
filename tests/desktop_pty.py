@@ -399,16 +399,16 @@ def stopped_quit(binary, folder, extra_env=None):
                 json.dumps(observation, default=lambda value: value.hex())+'\n')
             return (observation['alternate_screen_left'] and observation['cursor_visible'] and
                     restored_termios(actual, d.outer_before))
-        d.wait(outer_restored, 'outer terminal was not restored before escalation', timeout=1)
+        d.wait(outer_restored, 'outer terminal was not restored while core was stopped', timeout=1)
         state = subprocess.run(['/bin/ps', '-o', 'state=', '-p', str(core_pid)],
                                capture_output=True, text=True, check=True).stdout.strip()
         assert 'T' in state, 'test did not observe restoration while the owned core was still stopped'
-        assert restored_termios(termios.tcgetattr(d.slave), d.outer_before), 'outer termios not restored before escalation'
-        assert not d.screen.cursor.hidden, 'outer cursor not restored before escalation'
+        assert restored_termios(termios.tcgetattr(d.slave), d.outer_before), 'outer termios not restored while core was stopped'
+        assert not d.screen.cursor.hidden, 'outer cursor not restored while core was stopped'
         restored = d.restore()
         assert d.absent(core_pid)
         assert b'cleanup was not graceful' in d.raw, 'forced cleanup was reported as graceful'
-        return {'outer_restoration_before_core_escalation': True, 'stopped_core_reaped': True, **restored}
+        return {'outer_restored_while_core_stopped': True, 'stopped_core_reaped': True, **restored}
     finally: d.close()
 
 def synthetic_desktop(binary, folder, mode):
