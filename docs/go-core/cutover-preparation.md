@@ -48,15 +48,26 @@ checks does not prove future captions, modal cancellation, application lifetime,
 terminal restoration or controller wiring. Pending cases stay explicit.
 
 Preparatory transport regressions are registered as
-session_metadata_lifecycle, session_metadata_unavailable,
-session_metadata_loss-before-status, and
-session_metadata_loss-after-status. They use only the small synthetic
-fake_core.py peer and the accepted CoreConnection/SessionEndpoint seam.
-They cover typed status after the output flush barrier, input suppression while a
-correlated Closed response is held behind an unrelated request, retained status,
-unavailable status without an invented exit code, EOF before status, and EOF
-after an exact status was already published. They do not exercise
-the pending desktop window state machine or modal UI.
+session_metadata_lifecycle, session_metadata_close-pending-live,
+session_metadata_unavailable, session_metadata_loss-before-status, and
+session_metadata_loss-after-status. They use only the small synthetic fake_core.py
+peer and the accepted CoreConnection/SessionEndpoint seam.
+They cover typed status after the output flush barrier, the exited-session
+correlated Close lifecycle, unavailable status without an invented exit code,
+EOF before status, and EOF after an exact status was already published. The live
+Close-pending case now establishes an acknowledged positive input path before
+Close, then checks both input origins, duplicate Close, unrelated transport
+progress, and final output/status/Closed ordering. It does not exercise the
+pending desktop window state machine or modal UI.
+
+The bounded two-session output regression uses the existing `streams` peer mode
+through CoreConnection, applies finite read deadlines, cancels only an unread
+local endpoint on a missing frame, and performs graceful Shutdown/join before
+reporting the failure. It protects each session's exact initial bytes and
+sequence without force-killing the fake peer. Against the published candidate
+fixture it produced the expected RED because session B's `Bxy` output was
+missing; after the fixture correction it passed alongside the existing streams
+and output-fragments cases.
 
 ## Task 12 sibling packaging specification
 
@@ -82,16 +93,35 @@ outer-terminal restoration, or the installed product. Existing
 core_connection_failures covers a wrong handshake response; the
 preparation batch records only the newly added focused cases.
 
-At this checkpoint, source and CTest registration are prepared. The coordinated
-focused batch passed: both standalone C++14 builds (`session_metadata_test` and
-`core_process_test`), all four metadata cases above, and the `package_siblings`
-wrapper's single `sibling-check` case. The two builds used only the three Core
-client implementation translation units and copied synthetic `fake_core.py`
-fixture; no CMake configure, Go build, PTY test, or broad test suite ran. The
-sibling test joined its direct fixture child and verified its exit value; the
-temporary batch directory was removed after all subprocesses returned. These
-results qualify only the listed synthetic seams. No PR2 default qualification
-or Task 10 gate is claimed.
+The corrective source and CTest registration were tested as reviewed working
+tree inputs on top of commit `c501324c0b9af566cff2233013c66b2e9bc5e2a8`;
+the source manifest SHA256 is `2e55b940b187df1246f7d2b68a49b5af31d04268faec5aa42d6df219be4a921a`.
+One approved bounded batch built
+four standalone C++14 binaries from the three Core client implementation
+translation units, then passed the two-session output regression, existing
+streams and output-fragments cases, all five named metadata cases, and the
+`package_siblings` wrapper's single `sibling-check` case. All 13 commands exited
+zero; the script's wall time was 8.119 seconds and summed subprocess time was
+8.081 seconds against its 60-second aggregate wall limit. It used one durable
+synthetic fixture copy (SHA256
+`6d1e8efe1ec2e9aa28fc6a6edd64bee590fa4b2b1969ee480d535fc1c65d541d`, mode 0700).
+The R1 log records both readers collected and a graceful owned-core join with no
+signal. The live Close log records all three bounded reads collected and a
+graceful join with no signal; it observed ACK sequence 1, final tail and End
+sequence 2, then passed the correlated Closed/status assertions. The packaging
+wrapper reported sibling resolution through a relocated path with spaces and
+a PATH impostor.
+
+The exact command array, per-command results, raw logs, corrected binaries, and
+source input hashes are retained in the ignored local evidence directory
+`.probe/pr11-remediation/green/`; `run-summary.json` has SHA256
+`48f4c02d5107801defccc758d62e7b9641410e1c44b4efd3d19878f51225b2a5`, and the
+artifact checksum index is `evidence-index.sha256`. The earlier batch's
+review-found fixture regression and its RED evidence remain under the same
+evidence root. The sibling wrapper's temporary directory was removed after its
+subprocess returned. No CMake configure, Go build, PTY/native UI test, install
+test, or broad suite ran. These results qualify only the listed synthetic seams;
+they do not satisfy PR2 default qualification or close the Task 10 gate.
 
 ## Operator and native acceptance checklist
 

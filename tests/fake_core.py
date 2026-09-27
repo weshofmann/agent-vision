@@ -57,6 +57,7 @@ reserve_ready=False
 reserve_next=False
 reserve_sequence=1
 metadata_close_held=None
+metadata_live_close_held=None
 while True:
     t,r,sid,body=read()
     assert r>last_request
@@ -66,11 +67,25 @@ while True:
         if mode in ('stale','binding'): session=1  # deliberate fully-retired ID reuse to challenge old handles
         assert body==b'\x00\x18\x00\x50\x00\x04\x00\x00'
         if mode=="binding": binding_base=r; binding_input=False
+        if mode=='metadata-live-close':
+            out=frame(4,r,session,body)
+            if session==2:
+                assert metadata_live_close_held is not None
+                out += frame(9,sid=1,body=struct.pack('>Q',2)+b'tail')
+                out += frame(10,sid=1,body=struct.pack('>BIBQB',1,7,0,2,3))
+            elif session==3:
+                assert metadata_live_close_held is not None
+                close_request, close_session = metadata_live_close_held
+                out += frame(11,close_request,close_session,struct.pack('>Q',2))
+                metadata_live_close_held=None
+            s.sendall(out)
+            continue
         out=frame(4,r,session,body)
         data=b'A\x00\xff' if session==1 else b'Bxy'
         if session==1 and mode in ('metadata-lifecycle','metadata-loss','metadata-exit-loss'):
             out += frame(9,sid=session,body=struct.pack('>Q',1)+b'tail')
-        elif session==1 and mode not in ('blocked-writer','partial-write','dsr-reserve','metadata-unavailable'):
+        elif mode not in ('blocked-writer','partial-write','dsr-reserve','metadata-unavailable',
+                          'metadata-lifecycle','metadata-loss','metadata-exit-loss'):
             out+=frame(9,sid=session,body=struct.pack('>Q',1)+data)
         if session==1 and mode in ('metadata-lifecycle','metadata-exit-loss'):
             out += frame(10,sid=session,body=struct.pack('>BIBQB',2,15,1,1,3))
@@ -91,6 +106,18 @@ while True:
         if mode=='blocked-writer' and session==16:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)
     elif t in (5,6,14):
+        if mode=='metadata-live-close':
+            assert sid==1 and t in (5,14)
+            if t==5:
+                if body==b'p':
+                    s.sendall(frame(13,r,sid,struct.pack('>H',t)))
+                    s.sendall(frame(9,sid=sid,body=struct.pack('>Q',1)+b'ack'))
+                else:
+                    assert body in (b'u',b'e')
+                    s.sendall(frame(13,r,sid,struct.pack('>H',t)))
+            else:
+                s.sendall(frame(13,r,sid,struct.pack('>H',t)))
+            continue
         if mode=='output-fragments' and t==14 and sid==1:
             amount=struct.unpack('>I',body)[0]
             if fragment_credit==0: assert amount==1  # only the released prefix
@@ -225,6 +252,10 @@ while True:
         if mode=='metadata-lifecycle':
             assert metadata_close_held is None and sid==1
             metadata_close_held=(r,sid)
+            continue
+        if mode=='metadata-live-close':
+            assert metadata_live_close_held is None and sid==1
+            metadata_live_close_held=(r,sid)
             continue
         s.sendall(frame(11,r,sid,struct.pack('>Q',1025 if mode=='output-fragments' and sid==1 else 3 if mode=='output-fragments' and sid==2 else 2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode in ('partial-write','metadata-unavailable') else 1)))
         if mode=='credit-detach':

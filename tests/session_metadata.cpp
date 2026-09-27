@@ -2,10 +2,12 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace agentvision;
@@ -15,6 +17,59 @@ namespace {
 void check(bool condition, const char *message) {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+void reportCompletion(const char *label, const ConnectionCompletion &completion) {
+    std::cerr << "cleanup=" << label << " graceful=" << completion.graceful
+              << " contactError=" << static_cast<int>(completion.contactError)
+              << " childKind=" << static_cast<int>(completion.core.kind)
+              << " childValue=" << completion.core.value
+              << " systemError=" << completion.core.systemError
+              << " termSent=" << completion.core.termSent
+              << " killSent=" << completion.core.killSent << '\n';
+}
+
+class ConnectionCleanup {
+  public:
+    explicit ConnectionCleanup(std::shared_ptr<CoreConnection> connection)
+        : connection_(std::move(connection)) {}
+    ~ConnectionCleanup() {
+        if (!joined_) {
+            connection_->cancelLocal();
+            reportCompletion("fallback-cancel", connection_->join());
+        }
+    }
+    ConnectionCompletion shutdownAndJoin() noexcept {
+        connection_->shutdown();
+        auto completion = connection_->join();
+        joined_ = true;
+        reportCompletion("shutdown-join", completion);
+        return completion;
+    }
+
+  private:
+    std::shared_ptr<CoreConnection> connection_;
+    bool joined_ = false;
+};
+
+struct BoundedChunk {
+    TransportChunk chunk;
+    bool ready = false;
+    bool collected = false;
+};
+
+BoundedChunk readChunkBounded(const char *label,
+                              const std::shared_ptr<SessionEndpoint> &endpoint) {
+    auto read = std::async(std::launch::async, [endpoint] { return endpoint->readChunk(); });
+    const bool ready = read.wait_for(std::chrono::milliseconds(500)) ==
+                       std::future_status::ready;
+    if (!ready)
+        endpoint->cancelLocal();
+    auto chunk = read.get();
+    std::cerr << "reader=" << label << " ready=" << ready << " collected=1 kind="
+              << static_cast<int>(chunk.kind) << " sequence=" << chunk.sequence
+              << " bytes=" << chunk.bytes.size() << '\n';
+    return {std::move(chunk), ready, true};
 }
 
 ConnectionEvent nextEvent(const std::shared_ptr<CoreConnection> &connection,
@@ -113,6 +168,98 @@ int lifecycle() {
     return 0;
 }
 
+int closePendingLive() {
+    auto connection = start("metadata-live-close");
+    ConnectionCleanup cleanup(connection);
+    auto endpoint = create(connection);
+    const auto id = endpoint->metadata().id;
+
+    // The peer acknowledges and echoes this input only while the endpoint is
+    // live. This establishes an active input path before Close is admitted.
+    check(endpoint->enqueueInput({'p'}, InputOrigin::User) == EnqueueResult::Queued,
+          "live session admits positive user input before Close");
+    auto acceptedRead = readChunkBounded("pre-close-ack", endpoint);
+    if (!acceptedRead.ready) {
+        cleanup.shutdownAndJoin();
+        throw std::runtime_error("positive input acknowledgement output deadline");
+    }
+    auto accepted = std::move(acceptedRead.chunk);
+    check(accepted.kind == TransportChunk::Kind::Data &&
+              accepted.bytes == std::vector<char>({'a', 'c', 'k'}) &&
+              accepted.sequence == 1,
+          "fake peer acknowledges the live input with output");
+    endpoint->consumed(accepted.bytes.size());
+
+    const auto close = endpoint->requestClose();
+    const auto whileClosing = endpoint->metadata();
+    const auto userInput = endpoint->enqueueInput({'u'}, InputOrigin::User);
+    const auto emulatorInput = endpoint->enqueueInput({'e'}, InputOrigin::EmulatorReply);
+    const auto duplicateClose = endpoint->requestClose();
+    const bool closePendingStayedLive = close != 0 &&
+                                        whileClosing.id == id &&
+                                        whileClosing.state == SessionState::Running;
+
+    // A second Create is the fake peer's barrier: it proves unrelated transport
+    // progress, then releases the final output and typed status for session A.
+    check(connection->createSession(24, 80) != 0,
+          "unrelated Create progresses while live Close is pending");
+    const auto unrelated = nextEvent(connection, ConnectionEvent::Kind::Created);
+    check(unrelated.session != id, "unrelated session is distinct from closing session");
+    auto tailRead = readChunkBounded("final-tail", endpoint);
+    if (!tailRead.ready) {
+        cleanup.shutdownAndJoin();
+        throw std::runtime_error("pending Close final-tail deadline");
+    }
+    auto tail = std::move(tailRead.chunk);
+    check(tail.kind == TransportChunk::Kind::Data &&
+              tail.bytes == std::vector<char>({'t', 'a', 'i', 'l'}) && tail.sequence == 2,
+          "pending Close preserves final output through sequence two");
+    endpoint->consumed(tail.bytes.size());
+    auto endRead = readChunkBounded("final-seal", endpoint);
+    if (!endRead.ready) {
+        cleanup.shutdownAndJoin();
+        throw std::runtime_error("pending Close final-seal deadline");
+    }
+    const auto end = std::move(endRead.chunk);
+    check(end.kind == TransportChunk::Kind::End && end.sequence == 2,
+          "pending Close preserves the final output seal");
+    endpoint->flushed(end.sequence);
+    const auto exited = nextEvent(connection, ConnectionEvent::Kind::Exited);
+    check(exited.metadata.state == SessionState::Exited &&
+              exited.metadata.lastSequence == 2 &&
+              exited.metadata.status.kind == ExitKind::Exit &&
+              exited.metadata.status.value == 7 &&
+              exited.metadata.drainReason == DrainReason::ByteCap,
+          "exact exit is published after the pending-close flush barrier");
+
+    // A third Create releases the held correlated Closed only after the test
+    // has observed the exact Exited snapshot above.
+    check(connection->createSession(24, 80) != 0,
+          "second unrelated Create releases the held Closed response");
+    const auto secondUnrelated = nextEvent(connection, ConnectionEvent::Kind::Created);
+    check(secondUnrelated.session != id, "second unrelated session is distinct");
+    const auto closed = nextEvent(connection, ConnectionEvent::Kind::Closed);
+    const auto retained = endpoint->metadata();
+    const bool closeWasCorrelated = closed.request == close && closed.session == id &&
+                                    closed.metadata.state == SessionState::Closed &&
+                                    closed.metadata.lastSequence == 2 &&
+                                    closed.metadata.status.kind == ExitKind::Exit &&
+                                    closed.metadata.status.value == 7 &&
+                                    retained.state == SessionState::Closed &&
+                                    retained.lastSequence == 2 &&
+                                    retained.status.kind == ExitKind::Exit &&
+                                    retained.status.value == 7;
+
+    const auto completion = cleanup.shutdownAndJoin();
+    check(completion.graceful, "pending-close peer shuts down after owned cleanup");
+    check(closePendingStayedLive, "live endpoint retains identity/state while Close is pending");
+    check(userInput == EnqueueResult::Closed && emulatorInput == EnqueueResult::Closed,
+          "pending live Close suppresses user and emulator input");
+    check(duplicateClose == 0, "pending live Close rejects duplicate Close admission");
+    check(closeWasCorrelated, "final Closed retains exact status and close correlation");
+    return 0;
+}
+
 int unavailable() {
     auto connection = start("metadata-unavailable");
     auto endpoint = create(connection);
@@ -204,6 +351,8 @@ int main(int argc, char **argv) {
         const std::string mode(argv[1]);
         if (mode == "lifecycle")
             return lifecycle();
+        if (mode == "close-pending-live")
+            return closePendingLive();
         if (mode == "unavailable")
             return unavailable();
         if (mode == "loss-before-status")
