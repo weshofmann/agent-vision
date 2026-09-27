@@ -620,17 +620,34 @@ bool CoreConnection::dispatch(const Frame &f) {
         if (f.type == MessageType::OutputBytes) {
             size_t bytes = f.payload.size() - 8;
             if (e.seen == std::numeric_limits<uint64_t>::max() || sequence != e.seen + 1 ||
-                bytes > Window - e.rawOutstanding || e.chunkCount >= MaxChunks)
+                bytes > Window - e.rawOutstanding)
                 return false;
             e.seen = sequence;
             e.rawOutstanding += bytes;
             if (!e.cancelled) {
-                TransportChunk c;
-                c.kind = TransportChunk::Kind::Data;
-                c.sequence = sequence;
-                c.bytes.assign(f.payload.begin() + 8, f.payload.end());
-                e.chunks.push_back(std::move(c));
-                ++e.chunkCount;
+                // Wire fragmentation is arbitrary. Merge only the queued tail;
+                // readChunk has moved any borrowed vector out of this deque.
+                // Every wire sequence/raw byte still enters the ledger above.
+                if (!e.chunks.empty() && e.chunks.back().bytes.size() + bytes <= 32768) {
+                    auto &tail = e.chunks.back();
+                    // Explicit reserve prevents geometric capacity growth past
+                    // the owned-chunk bound while appending small wire frames.
+                    auto needed = tail.bytes.size() + bytes;
+                    if (tail.bytes.capacity() < needed)
+                        tail.bytes.reserve(
+                            std::min(size_t(32768), std::max(needed, tail.bytes.capacity() * 2)));
+                    tail.bytes.insert(tail.bytes.end(), f.payload.begin() + 8, f.payload.end());
+                    tail.sequence = sequence;
+                } else {
+                    if (e.chunkCount >= MaxChunks)
+                        return false;
+                    TransportChunk c;
+                    c.kind = TransportChunk::Kind::Data;
+                    c.sequence = sequence;
+                    c.bytes.assign(f.payload.begin() + 8, f.payload.end());
+                    e.chunks.push_back(std::move(c));
+                    ++e.chunkCount;
+                }
                 e.changed.notify_all();
             }
             return true;

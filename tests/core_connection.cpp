@@ -68,6 +68,70 @@ static std::shared_ptr<CoreConnection> start(const char *mode) {
 }
 int main(int argc, char **argv) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "output-fragments") {
+            auto c = start("output-fragments");
+            c->createSession(24, 80);
+            auto a = c->endpoint(event(c, ConnectionEvent::Kind::Created).session);
+            auto borrowed = a->readChunk();
+            c->createSession(24, 80);
+            auto b = c->endpoint(event(c, ConnectionEvent::Kind::Created).session);
+            auto initial = b->readChunk();
+            b->consumed(initial.bytes.size());
+            check(c->submitInput(a->metadata().id, {'f', 'r', 'a', 'g', 'm', 'e', 'n', 't'},
+                                 InputOrigin::User) == EnqueueResult::Queued,
+                  "fragment command");
+            auto barrier = b->readChunk();
+            check(barrier.bytes == std::vector<char>({'b', 'a', 'r', 'r', 'i', 'e', 'r'}),
+                  "valid tiny-frame burst must not lose contact below byte window");
+            b->consumed(barrier.bytes.size());
+            check(borrowed.bytes == std::vector<char>({'A', '\0', char(255)}) &&
+                      borrowed.sequence == 1,
+                  "borrowed chunk unchanged while queued tail coalesces");
+            check(a->metadata().state == SessionState::Running,
+                  "fragmented final status remains hidden while borrowed");
+            a->consumed(1);
+            check(a->metadata().state == SessionState::Running,
+                  "partial consumption cannot publish exact exit");
+            a->flushed(1025);
+            check(a->metadata().state == SessionState::Running,
+                  "early flush with borrowed tail rejected");
+            a->consumed(borrowed.bytes.size() - 1);
+            std::vector<char> bytes;
+            uint64_t sequence = 1;
+            for (;;) {
+                auto part = a->readChunk();
+                if (part.kind == TransportChunk::Kind::End) {
+                    check(part.sequence == 1025 && sequence == 1025, "merged final sequence");
+                    a->flushed(part.sequence);
+                    break;
+                }
+                check(part.kind == TransportChunk::Kind::Data && part.bytes.size() <= 32768 &&
+                          part.sequence > sequence,
+                      "bounded ordered owned chunks");
+                sequence = part.sequence;
+                bytes.insert(bytes.end(), part.bytes.begin(), part.bytes.end());
+                a->consumed(part.bytes.size());
+            }
+            check(bytes.size() == 1024, "all fragmented bytes retained");
+            for (size_t i = 0; i < bytes.size(); ++i)
+                check((unsigned char)bytes[i] == i % 251, "fragmented bytes remain ordered");
+            check(a->metadata().state == SessionState::Exited && a->metadata().status.value == 7,
+                  "exact final status after merged flush");
+            check(c->submitInput(b->metadata().id, {'c', 'r', 'e', 'd', 'i', 't'},
+                                 InputOrigin::User) == EnqueueResult::Queued,
+                  "credit audit on B");
+            auto credited = b->readChunk();
+            check(credited.bytes == std::vector<char>({'c', 'r', 'e', 'd', 'i', 't', 'e', 'd'}),
+                  "peer confirms exact consumed-only partial/full Credit");
+            b->consumed(credited.bytes.size());
+            check(a->requestClose() != 0, "fragmented Exited Close");
+            event(c, ConnectionEvent::Kind::Closed);
+            check(b->requestClose() != 0, "B still admits Close");
+            event(c, ConnectionEvent::Kind::Closed);
+            c->shutdown();
+            check(c->join().graceful, "fragmented graceful cleanup");
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "flush-close") {
             auto c = start("flush-close");
             for (int i = 0; i < 32; ++i) {
@@ -362,10 +426,16 @@ int main(int argc, char **argv) {
             auto id = a->metadata().id;
             check(c->returnCredit(id, 1) == 0, "credit cannot return unread data");
             auto first = a->readChunk();
-            a->consumed(first.bytes.size());
+            a->consumed(3);
             check(c->returnCredit(id, 1) == 0, "one pending Credit per session");
-            auto second = a->readChunk();
-            a->consumed(second.bytes.size());
+            if(first.bytes.size()==3){
+                auto second = a->readChunk();
+                check(second.bytes==std::vector<char>({'t','a','i','l'}),"remaining arbitrary chunk bytes");
+                a->consumed(second.bytes.size());
+            }else{
+                check(first.bytes==std::vector<char>({'A','\0',char(255),'t','a','i','l'}),"coalesced arbitrary chunk bytes");
+                a->consumed(4);
+            }
             a->cancelLocal();
             check(c->closeSession(id) != 0, "authoritative Close distinct from cancellation");
             event(c, ConnectionEvent::Kind::Closed);

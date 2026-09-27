@@ -47,6 +47,9 @@ control_held=[]
 control_credit=set()
 control_close=set()
 control_resizes=0
+fragment_credit=0
+fragment_probe=False
+fragment_reported=False
 while True:
     t,r,sid,body=read()
     assert r>last_request
@@ -63,7 +66,7 @@ while True:
         if mode=='credit-detach' and session==1:
             out+=frame(9,sid=1,body=struct.pack('>Q',2)+b'tail')
         if mode=='overflow-output':
-            out=b''.join([frame(4,r,session,body)]+[frame(9,sid=session,body=struct.pack('>Q',i)+b'x') for i in range(1,130)])
+            out=b''.join([frame(4,r,session,body)]+[frame(9,sid=session,body=struct.pack('>Q',i)+b'x'*32768) for i in range(1,10)])
         if mode=='malformed-status':
             out+=frame(10,sid=session,body=struct.pack('>BIBQB',1,0,0,2,1))
         if (session==1 and mode=='streams') or mode in ('flush-close','stale'): out+=frame(10,sid=session,body=struct.pack('>BIBQB',1,7,0,1,1))
@@ -71,6 +74,24 @@ while True:
         if mode=='blocked-writer' and session==16:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)
     elif t in (5,6,14):
+        if mode=='output-fragments' and t==14 and sid==1:
+            amount=struct.unpack('>I',body)[0]
+            if fragment_credit==0: assert amount==1  # only the released prefix
+            fragment_credit+=amount
+            assert fragment_credit<=1027  # no borrowed/discarded/double credit
+        if mode=='output-fragments' and t==5 and sid==2:
+            assert body==b'credit'
+            fragment_probe=True
+        if mode=='output-fragments' and fragment_probe and fragment_credit==1027 and not fragment_reported:
+            s.sendall(frame(9,sid=2,body=struct.pack('>Q',3)+b'credited'))
+            fragment_reported=True
+        if mode=='output-fragments' and t==5 and sid==1:
+            assert body==b'fragment' and fragment_credit==0
+            # Complete the entire A burst before a B barrier on the same stream.
+            out=b''.join(frame(9,sid=1,body=struct.pack('>Q',i+2)+bytes([i%251])) for i in range(1024))
+            out+=frame(10,sid=1,body=struct.pack('>BIBQB',1,7,0,1025,1))
+            out+=frame(9,sid=2,body=struct.pack('>Q',2)+b'barrier')
+            s.sendall(out)
         if mode=='dsr-reserve' and t in (5,6):
             held.append((t,r,sid))
             ordinary.append((t,body))
@@ -149,7 +170,7 @@ while True:
         if mode=='control-lanes':
             assert sid not in control_close
             control_close.add(sid); control_held.append((t,r,sid)); continue
-        s.sendall(frame(11,r,sid,struct.pack('>Q',2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode=='partial-write' else 1)))
+        s.sendall(frame(11,r,sid,struct.pack('>Q',1025 if mode=='output-fragments' and sid==1 else 3 if mode=='output-fragments' and sid==2 else 2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode=='partial-write' else 1)))
         if mode=='credit-detach':
             assert credit_held is not None
             old_r,old_sid=credit_held
