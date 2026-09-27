@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/weshofmann/agent-vision/core/internal/protocol"
 )
@@ -34,16 +36,29 @@ type Poller interface {
 	Wait(context.Context, int, bool) error
 }
 
+// MasterOpenReport has bounded same-call observations; it is not wire telemetry.
+type MasterOpenReport struct {
+	Attempts                        uint8
+	Elapsed                         time.Duration
+	Errnos                          [3]syscall.Errno
+	ErrnoObserved                   [3]bool
+	Recovered, Exhausted, Cancelled bool
+}
+
 // MasterFD is captured before nonblocking configuration. Users must cancel and
 // join every FD worker before Rollback closes it; never call Master.Fd afterwards.
 // Returned resources always belong to the caller, including a cancelled spawn.
 type Resources struct {
-	Master, Slave *os.File
-	MasterFD      int
-	Process       Process
-	closeOnce     sync.Once
-	closeErr      error
-	rollback      func(context.Context) error
+	Master, Slave  *os.File
+	MasterFD       int
+	Process        Process
+	closeOnce      sync.Once
+	closeErr       error
+	slaveCloseOnce sync.Once
+	slaveCloseErr  error
+	rollback       func(context.Context) error
+	close          func(*os.File) error
+	MasterOpen     MasterOpenReport
 }
 
 // Rollback is retryable after deadline expiry. A timeout never relinquishes child
@@ -51,10 +66,10 @@ type Resources struct {
 func (r *Resources) Rollback(ctx context.Context) error {
 	r.closeOnce.Do(func() {
 		if r.Slave != nil {
-			r.closeErr = errors.Join(r.closeErr, closeFile(r.Slave))
+			r.closeErr = errors.Join(r.closeErr, r.CloseParentSlave())
 		}
 		if r.Master != nil {
-			r.closeErr = errors.Join(r.closeErr, closeFile(r.Master))
+			r.closeErr = errors.Join(r.closeErr, r.closeOwned(r.Master))
 		}
 	})
 	if r.rollback != nil {
@@ -62,10 +77,22 @@ func (r *Resources) Rollback(ctx context.Context) error {
 	}
 	return r.closeErr
 }
-func closeFile(f *os.File) error {
-	e := f.Close()
-	if errors.Is(e, os.ErrClosed) {
-		return nil
+
+// CloseParentSlave records the first attempt, including ambiguous ErrClosed.
+// Immediate post-child close and every rollback share this immutable result.
+func (r *Resources) CloseParentSlave() error {
+	r.slaveCloseOnce.Do(func() {
+		if r.Slave != nil {
+			r.slaveCloseErr = r.closeOwned(r.Slave)
+		}
+	})
+	return r.slaveCloseErr
+}
+func closeFile(f *os.File) error { return f.Close() }
+
+func (r *Resources) closeOwned(f *os.File) error {
+	if r.close != nil {
+		return r.close(f)
 	}
-	return e
+	return closeFile(f)
 }

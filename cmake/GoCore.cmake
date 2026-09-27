@@ -38,7 +38,7 @@ function(agentvision_configure_core)
         COMMAND "${Python3_EXECUTABLE}" "${creack_guard}" "${_av_core_root}"
         VERBATIM)
 
-    set(go_env GOTOOLCHAIN=local GOENV=off GOWORK=off GOFLAGS=
+    set(go_env GOTOOLCHAIN=local GOENV=off GOWORK=off AGENTVISION_DARWIN_COMPARISON=0 GOFLAGS=
         GOOS=darwin GOARCH=arm64 CGO_ENABLED=0
         "GOCACHE=${_av_core_root}/.probe/go-cache"
         "GOMODCACHE=${_av_core_root}/.probe/go-modcache")
