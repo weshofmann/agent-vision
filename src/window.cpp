@@ -69,6 +69,7 @@ const char *TerminalWindow::getTitle(short)
 }
 void TerminalWindow::handleEvent(TEvent &event)
 {
+    ++eventDepth;
     if (event.what == evBroadcast) {
         if (event.message.command == cmStopPresentations) finish();
         if (event.message.command == cmCoreEvent && event.message.infoPtr) {
@@ -91,8 +92,9 @@ void TerminalWindow::handleEvent(TEvent &event)
             auto state = endpoint->metadata().state;
             if (state == SessionState::Exited || state == SessionState::Lost ||
                 state == SessionState::Closed) finish();
-            if (closeCompleted) {
+            if (closeCompleted && eventDepth == 1 && !(this->state & (sfDragging | sfModal))) {
                 finish();
+                --eventDepth; // No scope guard or member access may follow deletion.
                 TWindow::close();
                 return;
             }
@@ -103,6 +105,7 @@ void TerminalWindow::handleEvent(TEvent &event)
     // TerminalController itself suppresses emitted process input after End/Lost.
     // Keep selection commands and local navigation flowing through TerminalView.
     BasicTerminalWindow::handleEvent(event);
+    --eventDepth;
 }
 void TerminalWindow::close()
 {
@@ -112,8 +115,10 @@ void TerminalWindow::close()
         return;
     auto state = endpoint->metadata().state;
     if (authorityLost || state == SessionState::Lost || state == SessionState::Closed) {
+        // An explicit local dismissal follows the same safe completion boundary
+        // as a correlated Closed; close() may itself run on a nested view stack.
+        closeCompleted = true;
         finish();
-        TWindow::close();
         return;
     }
     closing = endpoint->requestClose();

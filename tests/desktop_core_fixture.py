@@ -56,6 +56,8 @@ try:
             if action == 'closed':
                 assert held_close is not None
                 close_request, close_session = held_close
+                if mode in ('close-drag', 'close-grab', 'close-mouse'):
+                    send(10, session=close_session, body=struct.pack('>BIBQB', 1, 7, 0, 1, 7))
                 send(11, close_request, close_session, struct.pack('>Q', 1))
                 held_close = None
                 released_close_count += 1
@@ -91,7 +93,8 @@ try:
             send(13, request, session, struct.pack('>H', 14))
         elif kind == 7:
             assert session == 2 and held_close is None
-            send(10, session=2, body=struct.pack('>BIBQB', 1, 7, 0, 1, 7))
+            if mode not in ('close-drag', 'close-grab', 'close-mouse'):
+                send(10, session=2, body=struct.pack('>BIBQB', 1, 7, 0, 1, 7))
             held_close = (request, session)
         elif kind == 8:
             send(13, request, body=struct.pack('>H', 8))

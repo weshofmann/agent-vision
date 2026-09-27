@@ -11,6 +11,7 @@ class TerminalWindow final : public tvterm::BasicTerminalWindow {
     const char label;
     agentvision::RequestId closing {0};
     bool closeCompleted {false}, finished {false}, resizeFailed {false}, authorityLost {false};
+    unsigned eventDepth {0};
     std::string caption;
     void finish();
 public:

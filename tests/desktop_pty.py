@@ -408,6 +408,39 @@ def synthetic_desktop(binary, folder, mode):
         d.wait(lambda: d.contains('Terminal A [live]') and
                           (d.contains('Terminal B [live]') or (mode == 'exit-then-loss' and d.contains('Terminal B [exited 7]'))) and
                           d.contains('FIXTURE_READY'), 'synthetic desktop did not become ready')
+        if mode in ('close-drag', 'close-grab', 'close-mouse'):
+            initial_bounds = d.bounds('B')
+            d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'interaction Close confirmation missing')
+            d.confirm(True)
+            d.wait(lambda: d.contains('Terminal B [closing]'), 'Close was not independently held')
+            if mode == 'close-drag':
+                d.menu('r')
+                d.wait(lambda: d.contains('Arrows') and d.contains('Move'), 'keyboard drag did not start')
+            elif mode == 'close-grab':
+                d.menu('m'); d.send('g')
+                d.wait(lambda: d.contains('Release Input'), 'modal input grab did not start')
+            else:
+                left, top, _, _ = initial_bounds
+                d.send(f'\x1b[<0;{left+9};{top+1}M')
+                d.send(f'\x1b[<32;{left+11};{top+2}M')
+            control.write_text('closed')
+            d.wait(lambda: json.loads(audit.read_text())['released_close_count'] == 1,
+                   'independent Closed release did not occur')
+            d.drain(.2)
+            if mode != 'close-grab':
+                assert d.contains('Terminal B ['), 'Closed destroyed a view on its active drag stack'
+                if mode == 'close-drag': d.send('\x1b[C' + '\r')
+                else: d.send(f'\x1b[<0;{left+11};{top+2}m')
+            # End also lets input grab unwind through the accepted adapter.
+            d.wait(lambda: not d.contains('Terminal B ['), 'Closed did not destroy after interaction unwound')
+            rows = json.loads(audit.read_text())
+            assert rows['released_close_count'] == 1 and sum(row['type'] == 7 for row in rows['requests']) == 1
+            d.command('progress')
+            d.wait(lambda: d.contains('A_PROGRESS'), 'interaction Close damaged survivor')
+            d.menu('q'); d.wait(lambda: d.contains('Terminate 1 live'), 'interaction survivor quit missing')
+            d.confirm(True); restored = d.restore()
+            return {'closed_released_during_interaction': True, 'eventual_single_close': True,
+                    'survivor_after_interaction_close': True, 'interaction': mode, **restored}
         if mode in ('exit-then-loss', 'close-then-loss'):
             if mode == 'close-then-loss':
                 d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'pending loss Close confirmation missing')
@@ -456,6 +489,9 @@ def startup_second(binary, folder): return synthetic_desktop(binary, folder, 'se
 def close_barrier(binary, folder): return synthetic_desktop(binary, folder, 'close-barrier')
 def exit_then_loss(binary, folder): return synthetic_desktop(binary, folder, 'exit-then-loss')
 def close_then_loss(binary, folder): return synthetic_desktop(binary, folder, 'close-then-loss')
+def close_drag(binary, folder): return synthetic_desktop(binary, folder, 'close-drag')
+def close_grab(binary, folder): return synthetic_desktop(binary, folder, 'close-grab')
+def close_mouse(binary, folder): return synthetic_desktop(binary, folder, 'close-mouse')
 
 def scrolling(binary, folder):
     d = Desktop(binary, folder)
@@ -497,7 +533,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
@@ -505,7 +541,8 @@ if __name__ == '__main__':
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
              'startup-before': startup_before, 'startup-after': startup_after,
              'startup-second': startup_second, 'close-barrier': close_barrier,
-             'exit-then-loss': exit_then_loss, 'close-then-loss': close_then_loss}
+             'exit-then-loss': exit_then_loss, 'close-then-loss': close_then_loss,
+             'close-drag': close_drag, 'close-grab': close_grab, 'close-mouse': close_mouse}
     results = {name: cases[name](args.binary.resolve(), args.output/name)
                for name in (args.cases or list(cases))}
     args.output.mkdir(parents=True, exist_ok=True)
