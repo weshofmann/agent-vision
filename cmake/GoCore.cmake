@@ -63,7 +63,10 @@ function(agentvision_configure_core)
             "${_av_core_root}/tests/test_creack_source_guard.py")
         set_tests_properties(core_replacement_guard PROPERTIES TIMEOUT 30)
         add_test(NAME core_go COMMAND "${CMAKE_COMMAND}" -E env ${go_env}
-            CGO_ENABLED=1 "${AGENTVISION_GO_EXECUTABLE}" test -mod=readonly -race ./... -timeout=120s)
+            CGO_ENABLED=1 "${Python3_EXECUTABLE}" "${_av_core_root}/tests/retained_go_test.py"
+            --go "${AGENTVISION_GO_EXECUTABLE}" --source-root "${_av_core_root}"
+            --evidence-root "${_av_core_root}/.probe/go-test-evidence"
+            -- ./... -timeout=120s)
         set_tests_properties(core_go PROPERTIES WORKING_DIRECTORY "${core}" TIMEOUT 150)
         add_test(NAME core_client COMMAND "${Python3_EXECUTABLE}"
             "${_av_core_root}/tests/core_client.py" "${binary}")

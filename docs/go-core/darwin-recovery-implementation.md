@@ -3,6 +3,9 @@
 Authority: [operator approval and assignment](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5858626978)
 at design head `79c30fd8dc2bd13036b1eef96903c03254b22808`.
 This implements RD-D1 through RD-D5 of the [approved design](darwin-master-open-recovery-design.md).
+**Current boundary:** correction cycle 1 under [independent triage](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859041800).
+The original comparison and partial qualification results below are preserved;
+amended native fixtures and resumed qualification remain held for re-review.
 T10-R1 remains open. All PRs remain Draft/unmerged; local C++ stays the default,
 PR #10 acceptance is unchanged and PR #11 stays frozen.
 
@@ -91,8 +94,9 @@ endpoint and join the existing cleanup owner, retaining the existing two-second
 start/cleanup and 200 ms goroutine assertions. It logs actual returned owner
 reports and descriptor state on failure as well as success. This is a new
 validation source delta for review, not a claim that the native test source is
-unchanged. Native execution and whole-module tests are held for independent
-Astra/high implementation review.
+unchanged. At the original pre-native checkpoint, native execution and whole-module tests
+were held for independent Astra/high implementation review. The subsequent
+results and current correction boundary are recorded below.
 
 ## One comparison recipe for independent review
 
@@ -149,3 +153,80 @@ review. Evidence from previous SHAs cannot substitute for this qualification.
 
 The final independent review and operator request must separately dispose of
 T10-R1 and the integration gate. None of the injected/build checks closes either.
+
+## Correction cycle 1: fixture ownership, causal cancellation and retention
+
+The coordinator's one approved comparison at `f4730d5` passed with 64 logical
+acquisitions, 64 raw Opens, at most three live pairs, all 128 first closes
+attempted/nil, no errors and no retry. This does not demonstrate recovery efficacy.
+Standalone native-sixteen passed; nested-module race passed with its existing
+Darwin I/O skips. The one whole-module race invocation then **failed**, with
+job-control cleanup, count-triggered cancellation and termios/size fixture failures.
+Its raw output hash is
+`20ed6eea6e41f1015318effe08a5d2db1caadff3f576d35ec6393f8ede7dba08`.
+No later native phase or unchanged retry followed that failure.
+
+The [failure record](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859018097)
+and [independent triage](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859041800)
+remain authoritative. Original broad/nested test executables were deleted by
+ordinary Go test cleanup; their runtime binary hashes were not observed. Retained
+injected executables are not relabeled as those binaries, and rebuilding cannot
+repair that historical evidence gap. Skipped termios/size per-case baselines
+remain unverified at that original head; the former unconditional parent log is
+not proof they passed.
+
+- **DRI-R1:** deliberate slave close now calls `CloseParentSlave` and checks the
+  first result. A small test-only master-close helper shares its first actual
+  result with the existing per-resource close hook. On nil it clears only the
+  fixture's master reference and invalidates its captured FD; on error it retains
+  both and returns the same first failure during rollback without another Close.
+  No production once guard is manually completed. Startup failure cleanup is
+  registered before fatal assertions, first close results are logged, and the
+  summary reflects only actually reached per-case baselines. The job-control
+  hangup/status assertion is retained; drain cannot read a reused saved FD.
+- **DRI-R2:** the Err-call-count context is removed. A real cancellable context
+  uses the existing native start seam to call `startDarwinChild` once, cancel only
+  after it returns an actual child, then return that same child/cleanup/error.
+  It asserts one start, exact adopted child identity, cancellation, bounded
+  rollback, available owned-child status and restored FD baseline. Cleanup is
+  registered before fatal assertions. The amended native fixture is compiled,
+  not executed before re-review.
+- **DRI-R3:** direct and CMake whole-module qualification use the small shared
+  `tests/retained_go_test.py` helper. The real qualified Go executable is its
+  actual child command, with `-mod=readonly -race -work -count=1`; each invocation
+  creates a fresh durable ignored GOTMPDIR before Go starts. It preserves the
+  printed WORK path, work-directory test executables, command, selected non-secret
+  environment, source archive/digests, Go executable/version, output and binary
+  hashes on success and nonzero exit. CMake's Go timeout120s/CTest timeout150s
+  and package selection remain unchanged. Fake-Go direct/CTest regressions prove
+  the retention contract without native qualification execution.
+
+The source mapping checks every non-test Go file, the complete 66-file effective
+nested source set, both dependency manifests, module files, upstream-relative
+patch, unchanged comparison source and qualified Go executable against the
+original f4730d5 identities. The original comparison/nested observations can
+carry forward only with that explicit original-SHA mapping and their evidence
+limits. They are not new-head runs. The comparison must not be repeated; no extra
+standalone native-sixteen run is required. The next runtime gate, after a clear
+re-review, is one retained-executable whole-module race invocation including the
+corrected fixtures and native-sixteen in normal suite context.
+
+From the worktree, prepare `$EVIDENCE` in a fresh durable ignored project directory
+and invoke the reviewed direct qualification command once:
+
+```sh
+GOTOOLCHAIN=local GOENV=off GOWORK=off GOFLAGS= CGO_ENABLED=1 \
+AGENTVISION_DARWIN_COMPARISON=0 python3 tests/retained_go_test.py \
+  --go "$GO" --source-root "$PWD" --evidence-root "$EVIDENCE" \
+  -- -v ./... -timeout=120s
+```
+
+The caller sets the existing qualified cache paths and supervises the existing
+outer cap; no helper deadline extends an admitted native call or test watchdog.
+CMake `core_go` uses the same helper with evidence under
+`<worktree>/.probe/go-test-evidence/run-<unique>/`, CGO enabled and comparison
+explicitly disabled. Inspect `started.json`, `result.json`, `output.txt`,
+`source-identities.json`, `source.tar.gz` and `tmp/<printed-WORK>/` before declaring
+qualification complete. If an outer supervisor interrupts finalization, retain
+all available WORK/output and classify that evidence as incomplete; never invent
+hashes or cleanup completion. Any new unexpected native failure returns to review.

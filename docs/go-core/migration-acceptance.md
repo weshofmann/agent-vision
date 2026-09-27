@@ -152,6 +152,14 @@ GODEBUG=execwait=2 GOGC=1 "$CTEST" --test-dir .probe/task10-on --output-on-failu
 
 The native core is an ordinary CGO-disabled `-trimpath -buildvcs=false` build;
 `core_go` separately runs the whole Go module with `-race` and CGO enabled.
+It now uses `tests/retained_go_test.py` to run the actual qualified Go child with
+`-work -count=1` and a fresh durable ignored GOTMPDIR under
+`.probe/go-test-evidence/`. WORK, executed test binaries/hashes, exact command,
+selected environment, source/replacement archive/digests and outputs survive
+success and failure. Go120s/CTest150s caps and the default desktop are unchanged.
+This future retention does not repair historical ordinary-Go-test binary gaps.
+For direct whole-module qualification and current held correction gates, follow
+[the Darwin recovery retention recipe](darwin-recovery-implementation.md#correction-cycle-1-fixture-ownership-causal-cancellation-and-retention).
 Execwait/GC settings are qualification settings, not ordinary CTest defaults.
 The pinned libvterm configure compatibility deprecation remains explicitly
 retained; warning-free compilation is a separate claim.
