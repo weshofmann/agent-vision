@@ -3,6 +3,7 @@
 #include <tvision/tv.h>
 #include "core_connection.h"
 #include "frontend_cleanup.h"
+#include "startup_adoption.h"
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -14,6 +15,7 @@ class AgentVisionApp final : public TApplication {
     std::mutex cleanupMutex;
     std::condition_variable cleanupChanged;
     agentvision::RestorationTarget cleanupTarget;
+    agentvision::StartupAdoption startupAdoption;
     bool cleanupRequested {false}, cleanupAcknowledged {false};
     bool suspended {false}, stopped {false}, cleanupTargetMiss {false};
     std::string startupFailure, cleanupFailure;
@@ -21,6 +23,7 @@ class AgentVisionApp final : public TApplication {
     bool addTerminal(const TRect &, char label);
     bool await(agentvision::ConnectionEvent::Kind, agentvision::ConnectionEvent &,
                agentvision::RequestId = 0);
+    bool startupAllowed();
     void localStopped();
     void serviceCleanup();
     void stopPresentations();

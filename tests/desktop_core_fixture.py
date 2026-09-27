@@ -75,6 +75,7 @@ try:
             send(4, request, created, body)
             save()
             if mode == 'crash-after-created': break
+            if created == 2 and mode == 'second-created-loss': break
             if created == 2:
                 send(9, session=2, body=struct.pack('>Q', 1)+b'FIXTURE_READY\r\n')
                 if mode == 'exit-then-loss':

@@ -396,6 +396,16 @@ def synthetic_desktop(binary, folder, mode):
         'AV_DESKTOP_CASE': mode, 'AV_DESKTOP_AUDIT': str(audit.resolve()),
         'AV_DESKTOP_CONTROL': str(control.resolve())})
     try:
+        if mode == 'second-created-loss':
+            d.wait(lambda: b'OUTER_READY' in d.raw or d.raw.count(b'\x1b[?1049h') >= 2,
+                   'second Created/loss left ready frontend suspended without recovery')
+            if b'OUTER_READY' in d.raw:
+                restored = d.restore(expected_exit=1)
+                assert d.raw.count(b'Go core ') == 1, 'lost startup did not report one diagnostic'
+                return {'second_created_loss_boundary': 'restored-startup-failure', **restored}
+            d.wait(lambda: d.contains('backend lost'), 'ready startup race did not resume retained loss UI')
+            d.menu('q'); restored = d.restore()
+            return {'second_created_loss_boundary': 'ready-before-loss-resumed', **restored}
         if mode in ('crash-before-created', 'crash-after-created', 'second-create-error'):
             restored = d.restore(expected_exit=1)
             assert b'Terminal B [live]' not in d.raw, 'partial startup claimed both ready windows'
@@ -492,6 +502,7 @@ def close_then_loss(binary, folder): return synthetic_desktop(binary, folder, 'c
 def close_drag(binary, folder): return synthetic_desktop(binary, folder, 'close-drag')
 def close_grab(binary, folder): return synthetic_desktop(binary, folder, 'close-grab')
 def close_mouse(binary, folder): return synthetic_desktop(binary, folder, 'close-mouse')
+def startup_final(binary, folder): return synthetic_desktop(binary, folder, 'second-created-loss')
 
 def scrolling(binary, folder):
     d = Desktop(binary, folder)
@@ -533,7 +544,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
@@ -542,7 +553,8 @@ if __name__ == '__main__':
              'startup-before': startup_before, 'startup-after': startup_after,
              'startup-second': startup_second, 'close-barrier': close_barrier,
              'exit-then-loss': exit_then_loss, 'close-then-loss': close_then_loss,
-             'close-drag': close_drag, 'close-grab': close_grab, 'close-mouse': close_mouse}
+             'close-drag': close_drag, 'close-grab': close_grab, 'close-mouse': close_mouse,
+             'startup-final': startup_final}
     results = {name: cases[name](args.binary.resolve(), args.output/name)
                for name in (args.cases or list(cases))}
     args.output.mkdir(parents=True, exist_ok=True)

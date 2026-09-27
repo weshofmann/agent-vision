@@ -44,8 +44,21 @@ AgentVisionApp::AgentVisionApp() :
     }
     agentvision::ConnectionEvent event;
     if (!await(agentvision::ConnectionEvent::Kind::Ready, event)) return;
-    ready = addTerminal(first, 'A') && addTerminal(second, 'B');
+    const bool created = addTerminal(first, 'A') && addTerminal(second, 'B');
+    {
+        std::lock_guard<std::mutex> lock(cleanupMutex);
+        // Serialize the handoff to runtime with the callback's cleanup boundary.
+        ready = created && startupAdoption.mayAdopt();
+        if (created && !ready) startupFailure = "Go core startup failed after contact cleanup.";
+    }
     if (!ready) connection->shutdown();
+}
+bool AgentVisionApp::startupAllowed()
+{
+    std::lock_guard<std::mutex> lock(cleanupMutex);
+    if (startupAdoption.mayAdopt()) return true;
+    startupFailure = "Go core startup failed after contact cleanup.";
+    return false;
 }
 bool AgentVisionApp::await(agentvision::ConnectionEvent::Kind kind,
                            agentvision::ConnectionEvent &event, agentvision::RequestId request)
@@ -53,11 +66,13 @@ bool AgentVisionApp::await(agentvision::ConnectionEvent::Kind kind,
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (std::chrono::steady_clock::now() < deadline) {
         serviceCleanup();
+        if (!startupAllowed()) return false;
         if (!connection->pollEvent(event)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        if (event.kind == kind && (!request || event.request == request)) return true;
+        if (event.kind == kind && (!request || event.request == request))
+            return startupAllowed();
         if (event.kind == agentvision::ConnectionEvent::Kind::Lost ||
             (event.kind == agentvision::ConnectionEvent::Kind::RequestError && event.request == request)) {
             startupFailure = "Go core startup failed (contact " +
@@ -82,6 +97,13 @@ bool AgentVisionApp::addTerminal(const TRect &bounds, char label)
         return false;
     }
     auto endpoint = connection->endpoint(created.session);
+    std::unique_lock<std::mutex> adoption(cleanupMutex);
+    if (!startupAdoption.mayAdopt()) {
+        startupFailure = "Go core startup failed after contact cleanup.";
+        return false;
+    }
+    // Presentation adoption is local, finite work. Holding only this UI gate
+    // makes it precede cleanup beginning; no socket operation or core join occurs.
     tvterm::VTermEmulatorFactory factory;
     auto transport = std::unique_ptr<tvterm::SessionTransport>(
         new agentvision::IpcSessionTransport(connection, endpoint));
@@ -104,6 +126,7 @@ void AgentVisionApp::stopPresentations()
 void AgentVisionApp::acknowledgeCleanup()
 {
     std::lock_guard<std::mutex> lock(cleanupMutex);
+    startupAdoption.cleanupBegun();
     cleanupTarget.acknowledge(agentvision::RestorationTarget::Clock::now());
     cleanupAcknowledged = true;
     cleanupChanged.notify_all();
@@ -115,6 +138,7 @@ void AgentVisionApp::localStopped()
     if (std::this_thread::get_id() == uiThread) {
         {
             std::lock_guard<std::mutex> lock(cleanupMutex);
+            startupAdoption.cleanupBegun();
             cleanupTarget.begin(entry);
         }
         stopPresentations();
@@ -124,6 +148,7 @@ void AgentVisionApp::localStopped()
         return;
     }
     std::unique_lock<std::mutex> lock(cleanupMutex);
+    startupAdoption.cleanupBegun();
     cleanupTarget.begin(entry); // Includes time awaiting this mutex; no target reset.
     cleanupRequested = true;
     TEventQueue::wakeUp();
