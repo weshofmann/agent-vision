@@ -14,6 +14,7 @@ import re
 import select
 import secrets
 import signal
+import shutil
 import struct
 import subprocess
 import sys
@@ -53,7 +54,7 @@ def resources(pid):
     return {'threads': threads, 'fds': actual//8}
 
 class Desktop:
-    def __init__(self, binary, folder, ignored_sigchld=False):
+    def __init__(self, binary, folder, ignored_sigchld=False, extra_env=None):
         self.folder = folder
         folder.mkdir(parents=True, exist_ok=True)
         # These two owned result files cannot be reused across probe runs.
@@ -81,6 +82,7 @@ class Desktop:
                 env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'SHELL': '/bin/sh',
                        'TERM': 'xterm-256color', 'LANG': 'en_US.UTF-8',
                        'HOME': '/nonexistent', 'ENV': '/dev/null', 'PS1': 'probe> '}
+                env.update(extra_env or {})
                 os.execve(str(binary), [str(binary)], env)
             (folder / 'app-pid.txt').write_text(str(app))
             _, status = os.waitpid(app, 0)
@@ -152,12 +154,12 @@ class Desktop:
     def absent(self, pid):
         result = subprocess.run(['/bin/ps', '-o', 'pid=', '-p', str(pid)], capture_output=True, text=True)
         return not result.stdout.strip()
-    def restore(self):
+    def restore(self, expected_exit=0):
         self.wait(lambda: b'OUTER_READY' in self.raw, 'normal quit did not return outer terminal')
         self.send('outer-check\n')
         self.wait(lambda: (self.folder / 'outer-result.json').exists(), 'outer supervisor did not finish')
         result = json.loads((self.folder / 'outer-result.json').read_text())
-        assert result['app_wait_status'] == 0
+        assert result['app_wait_status'] == expected_exit << 8
         assert result['cooked_input_restored'] and result['termios_restored_after_input']
         assert b'\x1b[?1049h' in self.raw and b'\x1b[?1049l' in self.raw
         deadline = time.monotonic()+2
@@ -165,7 +167,7 @@ class Desktop:
             waited, status = os.waitpid(self.pid, os.WNOHANG)
             if waited:
                 self.reaped = True
-                assert status == 0
+                assert status == expected_exit << 8
                 return result
             self.drain(.03)
         raise AssertionError('outer supervisor did not exit')
@@ -195,11 +197,27 @@ def shell_identity(desktop, label, cwd):
     tty = re.search(r'/dev/ttys?\w+', desktop.text()).group(0)
     return pid, tty
 
+def ownership(desktop):
+    # Assert direct ownership, not a process dump or a caption-derived identity.
+    def children(parent):
+        rows = subprocess.run(['/bin/ps', '-axo', 'pid=,ppid='], capture_output=True,
+                              text=True, check=True).stdout.splitlines()
+        return [int(row.split()[0]) for row in rows
+                if len(row.split()) == 2 and int(row.split()[1]) == parent]
+    cores = children(desktop.app_pid)
+    assert len(cores) == 1, 'frontend must own exactly the Go core child'
+    shells = children(cores[0])
+    assert len(shells) == 2, 'Go core must own two direct shell children'
+    assert '[pid ' not in desktop.text(), 'raw shell PID leaked into a public caption'
+    return cores[0], sorted(shells)
+
 def interaction(binary, folder):
     d = Desktop(binary, folder, ignored_sigchld=True)
     try:
-        d.wait(lambda: d.contains('Terminal A [pid ') and d.contains('Terminal B [pid '), 'two initial visible terminal windows missing')
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'), 'two initial visible terminal windows missing')
+        core_pid, _ = ownership(d)
         initial_resources = resources(d.app_pid)
+        initial_core_fds = resources(core_pid)['fds']
         initial_b = d.bounds('B')
         b_pid, b_tty = shell_identity(d, 'B', '/')
         d.menu('\t')
@@ -231,7 +249,8 @@ def interaction(binary, folder):
         assert d.contains('Terminal B [exited 7]') and d.contains('RETAIN_B_DONE')
         assert d.absent(b_pid), 'closed/exited B direct child still present'
         after_b = resources(d.app_pid)
-        assert after_b == {'threads': initial_resources['threads']-2, 'fds': initial_resources['fds']-1}, 'B workers/master FD not released while exited view retained'
+        assert resources(core_pid)['fds'] == initial_core_fds-4, f'Go B master FD baseline: {initial_core_fds} -> {resources(core_pid)["fds"]}'
+        assert after_b == {'threads': initial_resources['threads']-2, 'fds': initial_resources['fds']}, 'B presentation workers/shared IPC FD not released while exited view retained'
         d.snapshot('retained-exit')
         d.menu('\t'); d.command("printf 'SURVIVOR_%s CWD_%s\\n' \"$label\" \"$PWD\"")
         d.wait(lambda: d.contains('SURVIVOR_A CWD_/tmp'), 'exit-key fell through or survivor state lost')
@@ -243,9 +262,11 @@ def interaction(binary, folder):
         d.wait(lambda: d.contains('Terminal A [exited 0]'), 'A exact status missing')
         d.send('z'); assert d.contains('Terminal A [exited 0]')
         after_a = resources(d.app_pid)
-        assert after_a == {'threads': initial_resources['threads']-4, 'fds': initial_resources['fds']-2}, 'A workers/master FD not released while exited view retained'
+        assert resources(core_pid)['fds'] == initial_core_fds-8, f'Go A master FD baseline: {initial_core_fds} -> {resources(core_pid)["fds"]}'
+        assert after_a == {'threads': initial_resources['threads']-4, 'fds': initial_resources['fds']}, 'A presentation workers/shared IPC FD not released while exited view retained'
         d.menu('w'); d.menu('q')
         restored = d.restore()
+        assert d.absent(core_pid), 'frontend did not reap its direct core child'
         assert d.absent(a_pid)
         return {'two_distinct_pids_and_ptys': True, 'independent_cwd_state_and_focus': True,
                 'keyboard_moves_resize_z_order_overlap': True, 'a_inner_rows_cols': inner(a),
@@ -259,13 +280,13 @@ def interaction(binary, folder):
 def live_close_quit(binary, folder):
     d = Desktop(binary, folder)
     try:
-        d.wait(lambda: d.contains('Terminal A [pid ') and d.contains('Terminal B [pid '), 'two initial windows missing')
-        pids = [int(re.search(f'Terminal {label} \\[pid (\\d+)\\]', d.text()).group(1)) for label in ('A','B')]
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'), 'two initial windows missing')
+        core_pid, pids = ownership(d)
         initial_resources = resources(d.app_pid)
         d.menu('w')
         d.wait(lambda: d.contains('Terminate'), 'live close was not confirmed')
         d.confirm(False)  # Explicit No.
-        assert d.contains('Terminal B [pid '), 'cancel close destroyed window'
+        assert d.contains('Terminal B [live]'), 'cancel close destroyed window'
         d.command("printf 'CANCEL_%s\\n' OK")
         d.wait(lambda: d.contains('CANCEL_OK'), 'cancel close changed live input routing')
         d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'second close confirmation missing')
@@ -273,14 +294,15 @@ def live_close_quit(binary, folder):
         d.wait(lambda: not d.contains('Terminal B ['), 'confirmed live close did not close B')
         assert d.absent(pids[1]), 'live-closed B direct child remains'
         after_close = resources(d.app_pid)
-        assert after_close == {'threads': initial_resources['threads']-2, 'fds': initial_resources['fds']-1}, 'live close leaked workers/master FD'
+        assert after_close == {'threads': initial_resources['threads']-2, 'fds': initial_resources['fds']}, 'live close leaked presentation workers/shared IPC FD'
         d.command("printf 'SURVIVOR_%s\\n' OK")
         d.wait(lambda: d.contains('SURVIVOR_OK'), 'live close damaged survivor')
         d.menu('q'); d.wait(lambda: d.contains('Terminate'), 'live quit was not confirmed')
-        d.confirm(False); assert d.contains('Terminal A [pid '), 'cancel quit destroyed application'
+        d.confirm(False); assert d.contains('Terminal A [live]'), 'cancel quit destroyed application'
         d.menu('q'); d.wait(lambda: d.contains('Terminate'), 'second quit confirmation missing')
         d.confirm(True)
         restored = d.restore()
+        assert d.absent(core_pid), 'frontend did not reap its direct core child'
         assert all(d.absent(pid) for pid in pids), 'owned direct children remain after normal quit'
         return {'live_close_cancel_confirm': True, 'live_quit_cancel_confirm': True,
                 'direct_children_absent_after_live_close_quit': True,
@@ -290,21 +312,136 @@ def live_close_quit(binary, folder):
 def quit_both(binary, folder):
     d = Desktop(binary, folder)
     try:
-        d.wait(lambda: d.contains('Terminal A [pid ') and d.contains('Terminal B [pid '), 'two initial windows missing')
-        pids = [int(re.search(f'Terminal {label} \\[pid (\\d+)\\]', d.text()).group(1)) for label in ('A','B')]
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'), 'two initial windows missing')
+        core_pid, pids = ownership(d)
         d.menu('q')
         d.wait(lambda: d.contains('Terminate 2 live'), 'quit did not count both live shells')
         d.confirm(True)
         restored = d.restore()
+        assert d.absent(core_pid), 'frontend did not reap its direct core child'
         assert all(d.absent(pid) for pid in pids), 'two-live quit left a direct child'
         return {'confirmed_quit_both_live': True, 'both_direct_children_absent': True, **restored}
     finally: d.close()
 
+def core_loss(binary, folder, during_modal=False, continuous=False):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'two initial Go windows missing')
+        core_pid, shells = ownership(d)
+        initial = resources(d.app_pid)
+        d.command("i=0; while [ \"$i\" -lt 80 ]; do printf 'LOSS_ROW_%s\\n' \"$i\"; i=$((i+1)); done; printf 'LOSS_TAIL_%s\\n' READY")
+        d.wait(lambda: b'LOSS_TAIL_READY' in d.raw, 'loss fixture output not rendered')
+        if during_modal:
+            d.menu('w')
+            d.wait(lambda: d.contains('Terminate'), 'loss modal did not open')
+        os.kill(core_pid, signal.SIGKILL)
+        if continuous:
+            for _ in range(30):
+                d.send('x')
+        d.wait(lambda: d.raw.count(b'\x1b[?1049l') >= 1 and
+                          d.raw.count(b'\x1b[?1049h') >= 2,
+               'runtime loss did not restore outer terminal before resuming retained desktop')
+        if during_modal:
+            assert d.contains('Terminate'), 'loss destroyed the active confirmation stack'
+            d.confirm(False)
+        d.wait(lambda: d.contains('backend lost'), 'core loss fabricated a shell status')
+        assert d.contains('LOSS_TAIL_READY'), 'loss discarded retained cells'
+        after_loss = resources(d.app_pid)
+        assert after_loss['threads'] == initial['threads']-9, f'loss worker baseline: {initial} -> {after_loss}'
+        # Post-finish local event pump still handles selection and modal movement.
+        d.menu('s')
+        d.wait(lambda: d.contains('Copy'), 'lost view selection controls unavailable')
+        d.send('\x1b')
+        d.menu('r'); d.send('\x1b[C' + '\r')
+        assert d.contains('backend lost')
+        d.menu('q')
+        restored = d.restore()
+        assert d.absent(core_pid)
+        return {'runtime_restore_then_resume': True, 'lost_output_retained': True,
+                'modal_loss_preserved': during_modal, 'continuous_input_serviced': continuous,
+                'lost_local_selection_move': True, **restored}
+    finally: d.close()
+
+def loss_modal(binary, folder): return core_loss(binary, folder, during_modal=True)
+def loss_continuous(binary, folder): return core_loss(binary, folder, continuous=True)
+
+def stopped_quit(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'initial Go windows missing')
+        core_pid, _ = ownership(d)
+        os.kill(core_pid, signal.SIGSTOP)
+        d.menu('q'); d.wait(lambda: d.contains('Terminate 2 live'), 'stopped core quit did not confirm')
+        d.confirm(True)
+        d.wait(lambda: b'\x1b[?1049l' in d.raw, 'outer terminal was not restored before escalation', timeout=1)
+        assert not d.absent(core_pid), 'test did not observe restoration before the stopped core was killed'
+        restored = d.restore()
+        assert d.absent(core_pid)
+        assert b'cleanup was not graceful' in d.raw, 'forced cleanup was reported as graceful'
+        return {'outer_restoration_before_core_escalation': True, 'stopped_core_reaped': True, **restored}
+    finally: d.close()
+
+def synthetic_desktop(binary, folder, mode):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit = folder/'audit.json'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': mode, 'AV_DESKTOP_AUDIT': str(audit.resolve())})
+    try:
+        if mode in ('crash-before-created', 'crash-after-created', 'second-create-error'):
+            restored = d.restore(expected_exit=1)
+            assert b'Terminal B [live]' not in d.raw, 'partial startup claimed both ready windows'
+            assert d.raw.count(b'Go core ') == 1, 'startup failure lacked one diagnostic'
+            record = json.loads(audit.read_text())
+            assert record['created'] == (0 if mode == 'crash-before-created' else 1)
+            if mode == 'second-create-error':
+                assert record['requests'][-1]['type'] == 8, 'partial Create failure did not Shutdown core'
+            return {'single_diagnostic': True, 'partial_create_never_ready': True, **restored}
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]') and
+                          d.contains('FIXTURE_READY'), 'synthetic desktop did not become ready')
+        # Cancellation sends neither Close nor Shutdown; use audit only for protocol effects.
+        d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'fake close confirmation missing')
+        d.confirm(False)
+        assert not any(row['type'] == 7 for row in json.loads(audit.read_text())['requests'])
+        d.menu('q'); d.wait(lambda: d.contains('Terminate'), 'fake quit confirmation missing')
+        d.confirm(False)
+        assert not any(row['type'] == 8 for row in json.loads(audit.read_text())['requests'])
+        d.menu('r'); d.send('\x1b[1;2D' + '\r')
+        d.wait(lambda: d.contains('resize failed'), 'typed resize failure did not reach caption')
+        d.menu('w'); d.wait(lambda: d.contains('Terminate'), 'confirmed fake close missing')
+        d.confirm(True)
+        d.wait(lambda: d.contains('Terminal B [exited 7]'), 'pending Close final status missing')
+        assert d.contains('Terminal B ['), 'presentation destroyed before held correlated Closed'
+        before = sum(row['type'] == 5 for row in json.loads(audit.read_text())['requests'])
+        d.send('suppressed')
+        after = sum(row['type'] == 5 for row in json.loads(audit.read_text())['requests'])
+        assert before == after, 'confirmed Close admitted additional input'
+        d.menu('\t'); d.command('progress')
+        d.wait(lambda: d.contains('A_PROGRESS') and not d.contains('Terminal B ['),
+               'Close did not allow A progress before correlated destruction')
+        d.menu('q'); d.wait(lambda: d.contains('Terminate 1 live'), 'fake survivor quit missing')
+        d.confirm(True); restored = d.restore()
+        return {'cancel_close_quit_send_nothing': True, 'resize_error_visible': True,
+                'held_close_retains_view_and_suppresses_input': True,
+                'unrelated_session_progress_then_correlated_destroy': True, **restored}
+    finally: d.close()
+
+def startup_before(binary, folder): return synthetic_desktop(binary, folder, 'crash-before-created')
+def startup_after(binary, folder): return synthetic_desktop(binary, folder, 'crash-after-created')
+def startup_second(binary, folder): return synthetic_desktop(binary, folder, 'second-create-error')
+def close_barrier(binary, folder): return synthetic_desktop(binary, folder, 'close-barrier')
+
 def scrolling(binary, folder):
     d = Desktop(binary, folder)
     try:
-        d.wait(lambda: d.contains('Terminal A [pid ') and d.contains('Terminal B [pid '), 'two initial windows missing')
-        pids = [int(re.search(f'Terminal {label} \\[pid (\\d+)\\]', d.text()).group(1)) for label in ('A','B')]
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'), 'two initial windows missing')
+        core_pid, pids = ownership(d)
         initial = resources(d.app_pid)
         d.command("i=0; while [ \"$i\" -lt 80 ]; do printf 'ROW_%s\\n' \"$i\"; i=$((i+1)); done; printf 'SCROLL_%s\\n' DONE")
         # Observe the rendered output stream, not just a command echo or a
@@ -323,7 +460,7 @@ def scrolling(binary, folder):
         d.confirm(True)
         d.wait(lambda: not d.contains('Terminal B ['), 'scrolling B close failed')
         after_close = resources(d.app_pid)
-        assert after_close == {'threads': initial['threads']-2, 'fds': initial['fds']-1}
+        assert after_close == {'threads': initial['threads']-2, 'fds': initial['fds']}
         assert d.absent(pids[1])
         d.command("printf 'SCROLL_SURVIVOR_%s\\n' OK")
         d.wait(lambda: d.contains('SCROLL_SURVIVOR_OK'), 'scrolling close damaged survivor')
@@ -340,12 +477,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
-    results = {'interaction': interaction(args.binary.resolve(), args.output/'interaction'),
-               'live_close_quit': live_close_quit(args.binary.resolve(), args.output/'live-close-quit'),
-               'quit_both': quit_both(args.binary.resolve(), args.output/'quit-both'),
-               'scrolling': scrolling(args.binary.resolve(), args.output/'scrolling')}
+    cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
+             'quit-both': quit_both, 'scrolling': scrolling, 'loss-modal': loss_modal,
+             'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
+             'startup-before': startup_before, 'startup-after': startup_after,
+             'startup-second': startup_second, 'close-barrier': close_barrier}
+    results = {name: cases[name](args.binary.resolve(), args.output/name)
+               for name in (args.cases or list(cases))}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output/'summary.json').write_text(json.dumps(results, indent=2)+'\n')
     print(json.dumps(results, indent=2))

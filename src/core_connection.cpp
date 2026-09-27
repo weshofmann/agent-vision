@@ -259,7 +259,12 @@ void SessionEndpoint::cancelLocal() noexcept {
 CoreConnection::CoreConnection(std::unique_ptr<CoreProcess> p, std::function<void()> f)
     : state_(new State(std::move(p), std::move(f))) {}
 StartResult CoreConnection::start(const std::string &path, std::function<void()> restored) {
-    auto launch = CoreProcess::launch(path);
+    return startLaunch(CoreProcess::launch(path), std::move(restored));
+}
+StartResult CoreConnection::startSibling(std::function<void()> restored) {
+    return startLaunch(CoreProcess::launchSibling(), std::move(restored));
+}
+StartResult CoreConnection::startLaunch(LaunchResult launch, std::function<void()> restored) {
     if (!launch.process)
         return {nullptr, launch.error, launch.systemError};
     auto c = std::shared_ptr<CoreConnection>(

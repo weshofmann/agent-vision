@@ -98,6 +98,7 @@ class CoreConnection {
     // owns both strong handles, avoiding a connection/endpoint reference cycle.
     static StartResult start(const std::string &absolutePath,
                              std::function<void()> localStopped = {});
+    static StartResult startSibling(std::function<void()> localStopped = {});
     ~CoreConnection();
     // Zero RequestId means admission failed. Queued Input/Resize means bounded
     // local staging, not a PTY write Ack: these private emissions receive wire IDs
@@ -117,6 +118,7 @@ class CoreConnection {
   private:
     friend class SessionEndpoint;
     struct State;
+    static StartResult startLaunch(LaunchResult, std::function<void()>);
     explicit CoreConnection(std::unique_ptr<CoreProcess>, std::function<void()>);
     void reader() noexcept;
     void writer() noexcept;

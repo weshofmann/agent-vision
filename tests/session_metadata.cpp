@@ -1,4 +1,5 @@
 #include "core_connection.h"
+#include "window.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -121,6 +122,42 @@ void checkSignalStatus(const SessionMetadata &metadata, SessionState state) {
           "signal kind, value, and core-dump flag remain distinct");
     check(metadata.drainReason == DrainReason::ByteCap && metadata.lastSequence == 1,
           "drain reason and final output sequence remain attached to status");
+}
+
+int captions() {
+    SessionMetadata m;
+    m.id = 42;
+    m.state = SessionState::Running;
+    auto live = TerminalWindow::captionFor('A', m);
+    check(live.find("[live]") != std::string::npos && live.find("pid") == std::string::npos,
+          "live caption exposes typed state rather than a shell PID");
+    check(TerminalWindow::captionFor('A', m, true).find("[closing]") != std::string::npos,
+          "confirmed close is visible while authoritative state remains live");
+    m.state = SessionState::Exited;
+    m.status = {ExitKind::Signal, 15, true};
+    m.drainReason = DrainReason::ByteCap;
+    auto signal = TerminalWindow::captionFor('A', m);
+    check(signal.find("signal 15") != std::string::npos &&
+          signal.find("core dump") != std::string::npos && signal.find("tail: byte cap") != std::string::npos,
+          "typed signal, core flag, and bounded unread-tail reason reach the UI");
+    m.status = {ExitKind::Unavailable, 0, false};
+    m.drainReason = DrainReason::IOError;
+    auto unavailable = TerminalWindow::captionFor('A', m);
+    check(unavailable.find("status unavailable") != std::string::npos &&
+          unavailable.find("exited 0") == std::string::npos,
+          "unavailable status never becomes successful exit");
+    m.state = SessionState::Lost;
+    check(TerminalWindow::captionFor('B', m).find("backend lost") != std::string::npos,
+          "lost authority is distinguished from shell exit");
+    m.state = SessionState::Closed;
+    check(TerminalWindow::captionFor('B', m).find("[closed]") != std::string::npos,
+          "closed remains a typed lifecycle state");
+    m.state = SessionState::Exited;
+    m.status = {ExitKind::Exit, 7, false};
+    m.drainReason = DrainReason::EOFReached;
+    check(TerminalWindow::captionFor('B', m, false, true).find("[exited 7] [resize failed]") != std::string::npos,
+          "exact exit and failed resize operation are independently visible");
+    return 0;
 }
 
 int lifecycle() {
@@ -349,6 +386,7 @@ int main(int argc, char **argv) {
         if (argc != 2)
             throw std::runtime_error("expected one synthetic metadata case");
         const std::string mode(argv[1]);
+        if (mode == "ui-captions") return captions();
         if (mode == "lifecycle")
             return lifecycle();
         if (mode == "close-pending-live")
