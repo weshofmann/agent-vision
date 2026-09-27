@@ -47,6 +47,17 @@ Tests may exercise the accepted PR2 seams with synthetic peers. Passing those
 checks does not prove future captions, modal cancellation, application lifetime,
 terminal restoration or controller wiring. Pending cases stay explicit.
 
+Preparatory transport regressions are registered as
+session_metadata_lifecycle, session_metadata_unavailable,
+session_metadata_loss-before-status, and
+session_metadata_loss-after-status. They use only the small synthetic
+fake_core.py peer and the accepted CoreConnection/SessionEndpoint seam.
+They cover typed status after the output flush barrier, input suppression while a
+correlated Closed response is held behind an unrelated request, retained status,
+unavailable status without an invented exit code, EOF before status, and EOF
+after an exact status was already published. They do not exercise
+the pending desktop window state machine or modal UI.
+
 ## Task 12 sibling packaging specification
 
 | Case | Acceptance requirement |
@@ -62,6 +73,25 @@ terminal restoration or controller wiring. Pending cases stay explicit.
 Current sibling installation/default cutover is not implemented. Preparatory
 fake-sibling tests must be labeled as seam tests, not installed-product evidence.
 No production core or extra native PTY campaign is needed to prepare these cases.
+The package_siblings seam case copies the existing core_process_test into a
+temporary path containing spaces and exercises adjacent-sibling lookup from an
+unrelated current directory with a runnable PATH impostor, then checks missing
+and nonexecutable adjacent siblings and reaps only its direct synthetic child.
+It does not exercise CMake install rules, the real Go core, version negotiation,
+outer-terminal restoration, or the installed product. Existing
+core_connection_failures covers a wrong handshake response; the
+preparation batch records only the newly added focused cases.
+
+At this checkpoint, source and CTest registration are prepared. The coordinated
+focused batch passed: both standalone C++14 builds (`session_metadata_test` and
+`core_process_test`), all four metadata cases above, and the `package_siblings`
+wrapper's single `sibling-check` case. The two builds used only the three Core
+client implementation translation units and copied synthetic `fake_core.py`
+fixture; no CMake configure, Go build, PTY test, or broad test suite ran. The
+sibling test joined its direct fixture child and verified its exit value; the
+temporary batch directory was removed after all subprocesses returned. These
+results qualify only the listed synthetic seams. No PR2 default qualification
+or Task 10 gate is claimed.
 
 ## Operator and native acceptance checklist
 

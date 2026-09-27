@@ -108,6 +108,14 @@ if(BUILD_TESTING)
         target_compile_options(core_connection_test PRIVATE -Wall -Wextra -Wpedantic)
         target_compile_definitions(core_connection_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
         add_test(NAME core_connection COMMAND core_connection_test)
+        add_executable(session_metadata_test tests/session_metadata.cpp)
+        target_link_libraries(session_metadata_test PRIVATE agentvision-core-client)
+        target_compile_options(session_metadata_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(session_metadata_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
+        foreach(case IN ITEMS lifecycle unavailable loss-before-status loss-after-status)
+            add_test(NAME session_metadata_${case} COMMAND session_metadata_test ${case})
+            set_tests_properties(session_metadata_${case} PROPERTIES TIMEOUT 15)
+        endforeach()
         # Separate instrumented binary: no race barriers in the shipping library.
         add_executable(core_connection_credit_race_test tests/core_connection_credit_race.cpp
             src/core_protocol.cpp src/core_process.cpp src/core_connection.cpp)
@@ -134,6 +142,9 @@ if(BUILD_TESTING)
         file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/fake_core.py PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
         add_test(NAME core_process COMMAND core_process_test)
         set_tests_properties(core_process PROPERTIES TIMEOUT 20)
+        add_test(NAME package_siblings COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings.py" $<TARGET_FILE:core_process_test>)
+        set_tests_properties(package_siblings PROPERTIES TIMEOUT 20)
         add_test(NAME ipc_terminal_decode COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_decode.py")
         set_tests_properties(ipc_terminal_decode PROPERTIES TIMEOUT 30

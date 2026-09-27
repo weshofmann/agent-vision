@@ -56,6 +56,7 @@ reserve_credit=0
 reserve_ready=False
 reserve_next=False
 reserve_sequence=1
+metadata_close_held=None
 while True:
     t,r,sid,body=read()
     assert r>last_request
@@ -67,8 +68,14 @@ while True:
         if mode=="binding": binding_base=r; binding_input=False
         out=frame(4,r,session,body)
         data=b'A\x00\xff' if session==1 else b'Bxy'
-        if mode not in ('blocked-writer','partial-write','dsr-reserve'):
+        if session==1 and mode in ('metadata-lifecycle','metadata-loss','metadata-exit-loss'):
+            out += frame(9,sid=session,body=struct.pack('>Q',1)+b'tail')
+        elif session==1 and mode not in ('blocked-writer','partial-write','dsr-reserve','metadata-unavailable'):
             out+=frame(9,sid=session,body=struct.pack('>Q',1)+data)
+        if session==1 and mode in ('metadata-lifecycle','metadata-exit-loss'):
+            out += frame(10,sid=session,body=struct.pack('>BIBQB',2,15,1,1,3))
+        elif session==1 and mode=='metadata-unavailable':
+            out += frame(10,sid=session,body=struct.pack('>BIBQB',3,0,0,0,6))
         if mode=='credit-detach' and session==1:
             out+=frame(9,sid=1,body=struct.pack('>Q',2)+b'tail')
         if mode=='overflow-output':
@@ -77,6 +84,10 @@ while True:
             out+=frame(10,sid=session,body=struct.pack('>BIBQB',1,0,0,2,1))
         if (session==1 and mode=='streams') or mode in ('flush-close','stale'): out+=frame(10,sid=session,body=struct.pack('>BIBQB',1,7,0,1,1))
         s.sendall(out)
+        if mode=='metadata-lifecycle' and metadata_close_held is not None:
+            close_request, close_session = metadata_close_held
+            s.sendall(frame(11,close_request,close_session,struct.pack('>Q',1)))
+            metadata_close_held=None
         if mode=='blocked-writer' and session==16:
             signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(5); sys.exit(88)
     elif t in (5,6,14):
@@ -141,6 +152,10 @@ while True:
                 s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+marker))
             continue
         if mode=='binding' and t==14 and not binding_input: binding_base=r
+        if mode in ('metadata-loss','metadata-exit-loss') and t==5:
+            assert sid==1 and body==b'contact-loss'
+            s.sendall(frame(13,r,sid,struct.pack('>H',t)))
+            s.close(); sys.exit(0)
         if mode=='binding' and t in (5,6):
             if t==5:
                 assert not binding_input and body==b'x' and r==binding_base+1
@@ -207,12 +222,18 @@ while True:
         if mode=='control-lanes':
             assert sid not in control_close
             control_close.add(sid); control_held.append((t,r,sid)); continue
-        s.sendall(frame(11,r,sid,struct.pack('>Q',1025 if mode=='output-fragments' and sid==1 else 3 if mode=='output-fragments' and sid==2 else 2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode=='partial-write' else 1)))
+        if mode=='metadata-lifecycle':
+            assert metadata_close_held is None and sid==1
+            metadata_close_held=(r,sid)
+            continue
+        s.sendall(frame(11,r,sid,struct.pack('>Q',1025 if mode=='output-fragments' and sid==1 else 3 if mode=='output-fragments' and sid==2 else 2 if mode=='binding' and binding_input else 2 if mode=='credit-detach' else 0 if mode in ('partial-write','metadata-unavailable') else 1)))
         if mode=='credit-detach':
             assert credit_held is not None
             old_r,old_sid=credit_held
             s.sendall(frame(12,old_r,old_sid,b'\x00\x03'+bytes(6)))
     elif t==8:
+        if mode=='metadata-exit-loss':
+            s.close(); sys.exit(0)
         if mode=='dsr-reserve':
             assert len(ordinary)==48 or (reserve_schedule=='early' and len(ordinary)==49)
             assert reserve_ready
