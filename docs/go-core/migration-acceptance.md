@@ -282,3 +282,40 @@ Both the new default qualification failure and Important T10-R1 remain unresolve
 the shipping opt-in Go qualification remains 39/40 failed with unknown inner
 `pty.Open` cause. No Go or native heavy test was rerun in this wave. This is a
 scoped review checkpoint, not Task10 completion or operator acceptance.
+
+### WPR-F1 bounded fixture repair checkpoint (failed focused verification)
+
+The [supervisor's fixture-only authorization](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5852247553)
+followed the approved single-event diagnostic, which established that a merged
+`ready` + DSR event produces the real `ESC[0n` reply while the old exact-five-byte
+readiness gate stays false. That diagnostic was executed after the earlier
+rejections; it did not identify the callback in the original failed qualification.
+
+This test-only checkpoint replaces callback-count acceptance with ordered stream
+and actual adapter-admission observations. The peer keeps all 48 ordinary
+requests unacknowledged until Shutdown; it sends the second query only after
+cumulative real Credit reaches 13 bytes (8 initial query bytes plus 5 readiness
+bytes). The callback blocks that readiness consumption until the test has staged
+4,086 bytes behind the pending 10-byte real reply. A fragmented schedule releases
+each readiness byte after Credit for the preceding prefix. An early merged-query
+control and unrelated-EOF control exercise rejection by the overflow oracle.
+Production code, controller patches, pins and wire policies are unchanged.
+
+The one declared focused batch completed **24/25 passed, 24.70s; FAILED**.
+Normal reserve and forced fragmented readiness passed: exactly 47 ordered user
+admissions, slot48's actual 10-byte DSR/CPR reply, 4,086 queued filler bytes and the
+subsequent real four-byte DSR response returning `Overflow`. Both restored the
+FD baseline, joined presentation workers and completed contactNone/graceful peer
+exit0. The early-query negative rejected actual DSR generation before filling.
+The separate no-core merged-event characterization also passed.
+
+`ipc_session_reserve_loss` failed the assertion requiring peer exit0 without
+escalation; the failure did not report which completion field violated it.
+The production loss path calls `requestStop()` for nongraceful completion, so the
+negative's no-escalation expectation is suspect. This is source-based inference,
+not diagnosis of that actual child's exit. Exact source, binaries, commands and
+result logs were preserved before further action. The controller stopped this
+cycle: **no correction, retry, second focused batch or complete OFF qualification**
+was performed. The existing failed OFF and single-event archives remain unchanged.
+WPR-F1 and T10-R1 both remain open; this checkpoint claims neither fixture closure
+nor Task10/PR2 acceptance. No Go core or native-start test was executed.

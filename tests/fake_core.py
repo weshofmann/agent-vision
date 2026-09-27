@@ -50,6 +50,12 @@ control_resizes=0
 fragment_credit=0
 fragment_probe=False
 fragment_reported=False
+# Only dsr-reserve uses this forced schedule; other peer modes are unchanged.
+reserve_schedule=os.environ.get('AV_RESERVE_SCHEDULE','normal')
+reserve_credit=0
+reserve_ready=False
+reserve_next=False
+reserve_sequence=1
 while True:
     t,r,sid,body=read()
     assert r>last_request
@@ -92,6 +98,26 @@ while True:
             out+=frame(10,sid=1,body=struct.pack('>BIBQB',1,7,0,1025,1))
             out+=frame(9,sid=2,body=struct.pack('>Q',2)+b'barrier')
             s.sendall(out)
+        if mode=='dsr-reserve' and t==14:
+            assert sid==1 and len(body)==4
+            amount=struct.unpack('>I',body)[0]
+            assert amount>0
+            reserve_credit+=amount
+            assert reserve_credit<=17
+            # Acknowledge only actual returned Credit; ordinary obligations stay held.
+            s.sendall(frame(13,r,sid,struct.pack('>H',t)))
+            if reserve_ready and reserve_schedule=='fragmented' and 9<=reserve_credit<13:
+                # Each next marker byte waits for consumption of the previous prefix.
+                # This forces fragmentation even if the decoder packs adjacent frames.
+                reserve_sequence+=1
+                s.sendall(frame(9,sid=sid,body=struct.pack('>Q',reserve_sequence)+b'ready'[reserve_credit-8:reserve_credit-7]))
+            if reserve_ready and reserve_credit==13 and not reserve_next:
+                reserve_next=True
+                if reserve_schedule=='loss': s.close(); sys.exit(0)
+                if reserve_schedule!='early':
+                    reserve_sequence+=1
+                    s.sendall(frame(9,sid=sid,body=struct.pack('>Q',reserve_sequence)+b'\x1b[5n'))
+            continue
         if mode=='dsr-reserve' and t in (5,6):
             held.append((t,r,sid))
             ordinary.append((t,body))
@@ -100,8 +126,19 @@ while True:
                 if len(ordinary)>2: assert ordinary[-1]==(6,b'\x00\x1e\x00\x64')
                 if len(ordinary)==47: s.sendall(frame(9,sid=sid,body=struct.pack('>Q',1)+b'\x1b[5n\x1b[6n'))
                 continue
+            if len(ordinary)==49 and reserve_schedule=='early':
+                assert t==5 and body==b'\x1b[0n'
+                continue  # negative cleanup may race the actual early reply's writer
             assert len(ordinary)==48 and t==5 and body==b'\x1b[0n\x1b[1;1R'
-            s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+b'ready')+frame(9,sid=sid,body=struct.pack('>Q',3)+b'\x1b[5n'))
+            reserve_ready=True
+            reserve_sequence=2
+            if reserve_schedule=='early':
+                reserve_next=True
+                # One frame forces the established merged-callback defect.
+                s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+b'ready\x1b[5n'))
+            else:
+                marker=b'r' if reserve_schedule=='fragmented' else b'ready'
+                s.sendall(frame(9,sid=sid,body=struct.pack('>Q',2)+marker))
             continue
         if mode=='binding' and t==14 and not binding_input: binding_base=r
         if mode=='binding' and t in (5,6):
@@ -177,7 +214,9 @@ while True:
             s.sendall(frame(12,old_r,old_sid,b'\x00\x03'+bytes(6)))
     elif t==8:
         if mode=='dsr-reserve':
-            assert len(ordinary)==48
+            assert len(ordinary)==48 or (reserve_schedule=='early' and len(ordinary)==49)
+            assert reserve_ready
+            if reserve_schedule!='early': assert reserve_next and 13<=reserve_credit<=17
             for old_t,old_r,old_sid in held: s.sendall(frame(13,old_r,old_sid,struct.pack('>H',old_t)))
         if mode=='control-lanes':
             assert control_resizes==47 and len(control_credit)==16 and len(control_close)==16
