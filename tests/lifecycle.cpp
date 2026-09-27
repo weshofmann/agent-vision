@@ -19,6 +19,61 @@
 #include <stdexcept>
 #include <fstream>
 #include <fcntl.h>
+#include <pthread.h>
+#include <dlfcn.h>
+#include <atomic>
+static std::atomic<int> createdWorkers{0}, joinedWorkers{0};
+static std::atomic<uintptr_t> workerIdentities[128];
+static std::atomic<int> workerJoinResults[128];
+static uintptr_t identity(pthread_t thread) {
+#if defined(__APPLE__)
+    return reinterpret_cast<uintptr_t>(thread);
+#else
+    return static_cast<uintptr_t>(thread);
+#endif
+}
+static void recordJoin(pthread_t thread, int status) {
+    for (int ordinal = 0; ordinal < createdWorkers.load(); ++ordinal)
+        if (workerIdentities[ordinal] == identity(thread) && workerJoinResults[ordinal] == -999) {
+            workerJoinResults[ordinal] = status;
+            if (!status) ++joinedWorkers;
+            return;
+        }
+    std::abort(); // An unmatched observation is an instrumentation failure.
+}
+extern "C" int pthread_create(pthread_t *thread, const pthread_attr_t *attributes,
+                              void *(*start)(void *), void *argument)
+{
+    using Function = int (*)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
+    static auto native = reinterpret_cast<Function>(dlsym(RTLD_NEXT, "pthread_create"));
+    int result = native(thread, attributes, start, argument);
+    if (!result) {
+        int ordinal = createdWorkers.fetch_add(1);
+        if (ordinal >= 128) std::abort();
+        workerJoinResults[ordinal] = -999;
+        workerIdentities[ordinal] = identity(*thread);
+    }
+    return result;
+}
+#if defined(__APPLE__)
+// Test-only symbol wrapper. Actual libc++ join normal return is observed;
+// underlying pthread rc=0 is a contract inference, never an intercepted value.
+void std::thread::join() {
+    using Function = void (*)(std::thread *);
+    static auto native = reinterpret_cast<Function>(dlsym(RTLD_NEXT, "_ZNSt3__16thread4joinEv"));
+    static bool identified = [] {
+        Dl_info info {};
+        if (!native || !dladdr(reinterpret_cast<void *>(native), &info)) std::abort();
+        std::fprintf(stderr, "JOIN_OBSERVER original_symbol=%s image=%s\n", info.dli_sname, info.dli_fname);
+        return true;
+    }();
+    (void)identified;
+    auto ownedIdentity = native_handle();
+    native(this); // Original exception behavior propagates unchanged.
+    if (joinable() || identity(native_handle()) != 0) std::abort();
+    recordJoin(ownedIdentity, 0); // 0 denotes normal std::thread return here.
+}
+#endif
 #if defined(__APPLE__)
 #include <libproc.h>
 #else
@@ -48,6 +103,7 @@ static int descriptors()
     for (int fd = 0; fd < 4096; ++fd) if (fcntl(fd, F_GETFD) != -1) ++count;
     return count;
 }
+static void requireResources(int, int, const char *);
 static int controllerShutdown()
 {
     setenv("SHELL", "/bin/sh", 1);
@@ -59,12 +115,8 @@ static int controllerShutdown()
     auto *controller = tvterm::TerminalController::create({40, 12}, factory, onError);
     if (!controller) return 1;
     controller->shutDown();
-    if (threads() != beforeThreads || descriptors() != beforeDescriptors) {
-        std::fprintf(stderr, "FAIL: shutdown returned before worker/FD completion\n");
-        // Give upstream its existing shutdown window; never leave a live fixture.
-        sleep(2);
-        return 1;
-    }
+    requireResources(beforeThreads, beforeDescriptors,
+                     "shutdown returned before worker/FD completion");
     std::puts("PASS: shutdown completes owned workers and FDs");
     return 0;
 }
@@ -73,6 +125,76 @@ static void require(bool value, const char *reason)
 {
     if (!value) throw std::runtime_error(reason);
 }
+// Apple userspace joins and native task disappearance have distinct boundaries.
+// Require owned join/FD completion immediately, then one fixed native sample.
+// This is test qualification only: no shipping wait, poll or retry.
+static int nativeSamples = 0;
+static void requireResources(int baseThreads, int baseDescriptors, const char *reason)
+{
+    int observedThreads = threads(), observedDescriptors = descriptors();
+#if defined(__APPLE__)
+    require(createdWorkers == joinedWorkers, "owned worker join pending before native sample");
+    for (int ordinal = 0; ordinal < createdWorkers.load(); ++ordinal)
+        require(workerJoinResults[ordinal] == 0, "owned worker lacks normal join and cleared handle");
+    require(observedDescriptors == baseDescriptors, "FD baseline not restored before native sample");
+    std::fprintf(stderr, "RESOURCE_OBSERVATION immediate_threads=%d baseline_threads=%d immediate_fds=%d completed_owned_joins=%d\n",
+                 observedThreads, baseThreads, observedDescriptors, joinedWorkers.load());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ++nativeSamples;
+    require(threads() == baseThreads && descriptors() == baseDescriptors, reason);
+#else
+    require(observedThreads == baseThreads && observedDescriptors == baseDescriptors, reason);
+#endif
+}
+#if defined(__APPLE__)
+static int resourceQualificationProbes()
+{
+    auto rejects = [](int baselineThreads, int baselineFDs, const char *expected, int samples) {
+        int before = nativeSamples;
+        bool rejected = false;
+        try { requireResources(baselineThreads, baselineFDs, "fixed native sample remains nonbaseline"); }
+        catch (const std::runtime_error &error) {
+            rejected = std::string(error.what()) == expected;
+        }
+        require(rejected && nativeSamples - before == samples, "qualification failure probe missed exact stage");
+    };
+    int baselineThreads = threads(), baselineFDs = descriptors();
+    std::atomic<bool> release{false};
+    std::thread pending([&] { while (!release) std::this_thread::yield(); });
+    try {
+        rejects(baselineThreads, baselineFDs, "owned worker join pending before native sample", 0);
+    } catch (...) { release = true; pending.join(); throw; }
+    release = true; pending.join();
+    // Allow the diagnosed kernel measurement boundary before another fixture.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    int leaked = open("/dev/null", O_RDONLY);
+    require(leaked >= 0, "FD probe fixture open");
+    try { rejects(baselineThreads, baselineFDs, "FD baseline not restored before native sample", 0); }
+    catch (...) { close(leaked); throw; }
+    close(leaked);
+    // Deliberately unowned thread: call original C symbol without owned observer.
+    // A still-live native worker must fail the single final sample.
+    struct NativeGate { std::atomic<bool> ready{false}, release{false}; } gate;
+    using Create = int (*)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
+    using Join = int (*)(pthread_t, void **);
+    auto originalCreate = reinterpret_cast<Create>(dlsym(RTLD_NEXT, "pthread_create"));
+    auto originalJoin = reinterpret_cast<Join>(dlsym(RTLD_NEXT, "pthread_join"));
+    require(originalCreate && originalJoin, "unowned probe native symbols");
+    pthread_t unowned;
+    require(originalCreate(&unowned, nullptr, [](void *p) -> void * {
+        auto &g = *static_cast<NativeGate *>(p); g.ready = true;
+        while (!g.release) std::this_thread::yield();
+        return nullptr;
+    }, &gate) == 0, "unowned native probe create");
+    while (!gate.ready) std::this_thread::yield();
+    try { rejects(baselineThreads, baselineFDs, "fixed native sample remains nonbaseline", 1); }
+    catch (...) { gate.release = true; originalJoin(unowned, nullptr); throw; }
+    gate.release = true;
+    require(originalJoin(unowned, nullptr) == 0, "unowned native probe cleanup");
+    std::puts("PASS: skipped join and FD leak reject before sample; unowned native thread fails final sample");
+    return 0;
+}
+#endif
 struct ControllerOwner
 {
     tvterm::TerminalController *ptr;
@@ -139,7 +261,7 @@ static int controllerCases(const std::string &which)
             b.ptr->finish();
             assertReaped(a.ptr->childPid()); assertReaped(b.ptr->childPid());
             require(surface(*a.ptr).find("FINAL_OUTPUT") != std::string::npos, "final emulator output lost");
-            require(threads() == baseThreads && descriptors() == baseDescriptors,
+            requireResources(baseThreads, baseDescriptors,
                     "owned workers or FDs remain after natural completion");
         }
     } else if (which == "held-slave") {
@@ -201,7 +323,7 @@ static int controllerCases(const std::string &which)
         unlink(token);
         require(marker == "HUP_OK", "foreground job did not observe terminal hangup");
     }
-    require(threads() == baseThreads && descriptors() == baseDescriptors, "resource baseline not restored");
+    requireResources(baseThreads, baseDescriptors, "resource baseline not restored");
     std::puts("PASS: controller ownership, state and direct-child assertions");
     return 0;
 }
@@ -237,6 +359,9 @@ int main(int argc, char **argv)
     try {
         if (argc == 2) {
             std::string which = argv[1];
+#if defined(__APPLE__)
+            if (which == "qualification-probes") return resourceQualificationProbes();
+#endif
             if (which == "controller") return controllerShutdown();
             if (which == "blocked") return blockedWrite();
             if (which != "fallback") return controllerCases(which);

@@ -25,16 +25,19 @@ func config(shell string) SpawnConfig {
 func spawnTest(t *testing.T, shell string) *Resources {
 	t.Helper()
 	r, e := (DarwinSpawner{}).Spawn(context.Background(), config(shell))
-	if e != nil {
-		t.Fatal(e)
-	}
 	t.Cleanup(func() {
+		if r == nil {
+			return
+		}
 		c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if e := r.Rollback(c); e != nil {
 			t.Error(e)
 		}
 	})
+	if e != nil {
+		t.Fatal(e)
+	}
 	return r
 }
 func result(t *testing.T, p Process) ProcessResult {
@@ -201,8 +204,10 @@ func TestInteractiveJobControl(t *testing.T) {
 	waitForegroundJob(t, r)
 	writePTY(t, r, "\x03")
 	readUntil(t, r, "READY> ")
-	if e := r.Master.Close(); e != nil {
-		t.Fatal(e)
+	closeErr := closeFixtureMaster(r, func(f *os.File) error { return f.Close() })
+	t.Logf("job-control first master Close=%v; known-closed reference cleared=%t FD-invalid=%t", closeErr, r.Master == nil, r.MasterFD == -1)
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	v := drainResult(t, r)
 	if v.Err != nil || v.Status.Kind != 2 || v.Status.Value != uint32(syscall.SIGHUP) {
@@ -514,28 +519,29 @@ func TestPollWriteAndFailure(t *testing.T) {
 	}
 }
 
-// Cancellation at the post-spawn check returns ownership rather than losing it.
-type cancelAfterChecks struct {
-	context.Context
-	cancel context.CancelFunc
-	checks int
-}
-
-func (c *cancelAfterChecks) Err() error {
-	c.checks--
-	if c.checks == 0 {
-		c.cancel()
-	}
-	return c.Context.Err()
-}
+// Cancel causally after the real native start returns its actual child owner.
 func TestCancelledSpawnReturnsOwnedResources(t *testing.T) {
 	baseline := fdCount()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	step := &cancelAfterChecks{Context: ctx, cancel: cancel, checks: 3}
-	r, e := (DarwinSpawner{}).Spawn(step, config("/bin/sh"))
-	if !errors.Is(e, context.Canceled) || r == nil || r.Process == nil {
-		t.Fatalf("post-spawn cancellation failed adoption: %v", e)
+	ops := nativeDarwinSpawnOps()
+	starts := 0
+	var actualChild Process
+	ops.start = func(c SpawnConfig, s *os.File) (Process, func(context.Context) error, error) {
+		starts++
+		child, cleanup, e := startDarwinChild(c, s)
+		actualChild = child
+		registerKnownFixtureChildCleanup(t.Cleanup, func(e error) { t.Errorf("known native-returned child cleanup: %v", e) }, cleanup)
+		if child != nil {
+			cancel()
+		}
+		return child, cleanup, e
+	}
+	r, e := (DarwinSpawner{ops: &ops}).Spawn(ctx, config("/bin/sh"))
+	registerReturnedFixtureCleanup(t.Cleanup, func(e error) { t.Errorf("cancelled returned owner cleanup: %v", e) }, r)
+
+	if !errors.Is(e, context.Canceled) || r == nil || r.Process == nil || r.Process != actualChild || starts != 1 {
+		t.Fatalf("post-spawn cancellation failed adoption: starts=%d exact-owner=%t err=%v", starts, r != nil && r.Process == actualChild, e)
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cleanupCancel()
@@ -549,11 +555,9 @@ func TestCancelledSpawnReturnsOwnedResources(t *testing.T) {
 	if n := fdCount(); n != baseline {
 		t.Fatalf("cancelled spawn FD %d -> %d", baseline, n)
 	}
+	t.Logf("one real start; same cancelled child owner reaped with available status %+v; FD baseline restored", v.Status)
 }
 
-// R1: one resize in the old check-to-pause gap must complete without a second
-// signal. The after schedule emits its marker from a harmless native handler
-// that can run only after sigsuspend has atomically entered the unblocked wait.
 func TestDarwinResizeWaitInterleavings(t *testing.T) {
 	native := buildNative(t, "testdata/tty-wait-interleaving.c")
 	for _, schedule := range []string{"before", "after"} {

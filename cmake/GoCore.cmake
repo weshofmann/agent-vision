@@ -24,18 +24,33 @@ function(agentvision_configure_core)
         return()
     endif()
     set(core "${_av_core_root}/core")
-    set(go_env GOTOOLCHAIN=local GOENV=off GOWORK=off GOFLAGS=
+    if(NOT Python3_EXECUTABLE)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    endif()
+    set(creack_guard "${_av_core_root}/cmake/verify_creack_source.py")
+    set(creack_patch "${_av_core_root}/patches/creack-pty-darwin-master-boundary.patch")
+    set(creack_inputs "${core}/third_party/creack-pty/go.mod"
+        "${core}/third_party/creack-pty.pristine.json"
+        "${core}/third_party/creack-pty.downstream.json" "${creack_patch}" "${creack_guard}")
+    # Always guard the entire effective set, even additions after configuration
+    # when an existing executable would otherwise appear up to date.
+    add_custom_target(core-source-guard
+        COMMAND "${Python3_EXECUTABLE}" "${creack_guard}" "${_av_core_root}"
+        VERBATIM)
+
+    set(go_env GOTOOLCHAIN=local GOENV=off GOWORK=off AGENTVISION_DARWIN_COMPARISON=0 GOFLAGS=
         GOOS=darwin GOARCH=arm64 CGO_ENABLED=0
         "GOCACHE=${_av_core_root}/.probe/go-cache"
         "GOMODCACHE=${_av_core_root}/.probe/go-modcache")
     file(GLOB_RECURSE go_sources CONFIGURE_DEPENDS "${core}/*.go")
     set(binary "${CMAKE_CURRENT_BINARY_DIR}/agentvision-core")
     add_custom_command(OUTPUT "${binary}"
+        COMMAND "${Python3_EXECUTABLE}" "${creack_guard}" "${_av_core_root}"
         COMMAND "${CMAKE_COMMAND}" -E env ${go_env}
             "${AGENTVISION_GO_EXECUTABLE}" build -mod=readonly -trimpath -buildvcs=false
             -o "${binary}" ./cmd/agentvision-core
         WORKING_DIRECTORY "${core}"
-        DEPENDS ${go_sources} "${core}/go.mod" "${core}/go.sum"
+        DEPENDS core-source-guard ${go_sources} ${creack_inputs} "${core}/go.mod" "${core}/go.sum"
         COMMENT "Building pinned Go inherited-stream core" VERBATIM)
     add_custom_target(agentvision-core-build ALL DEPENDS "${binary}")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
@@ -44,8 +59,14 @@ function(agentvision_configure_core)
             "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
     endforeach()
     if(BUILD_TESTING)
+        add_test(NAME core_replacement_guard COMMAND "${Python3_EXECUTABLE}"
+            "${_av_core_root}/tests/test_creack_source_guard.py")
+        set_tests_properties(core_replacement_guard PROPERTIES TIMEOUT 30)
         add_test(NAME core_go COMMAND "${CMAKE_COMMAND}" -E env ${go_env}
-            CGO_ENABLED=1 "${AGENTVISION_GO_EXECUTABLE}" test -mod=readonly -race ./... -timeout=120s)
+            CGO_ENABLED=1 "${Python3_EXECUTABLE}" "${_av_core_root}/tests/retained_go_test.py"
+            --go "${AGENTVISION_GO_EXECUTABLE}" --source-root "${_av_core_root}"
+            --evidence-root "${_av_core_root}/.probe/go-test-evidence"
+            -- ./... -timeout=120s)
         set_tests_properties(core_go PROPERTIES WORKING_DIRECTORY "${core}" TIMEOUT 150)
         add_test(NAME core_client COMMAND "${Python3_EXECUTABLE}"
             "${_av_core_root}/tests/core_client.py" "${binary}")

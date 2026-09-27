@@ -1,8 +1,9 @@
-# Narrow Unix lifecycle patch
+# Composed local lifecycle and presentation transport patches
 
 `tvterm-lifecycle.patch` is relative to upstream tvterm
-`210eb23564da06c358d2623388939bb02f7f3419`. It changes only the PTY/controller
-headers and implementations. Turbo Vision, libvterm, emulator, window/frame/view
+`210eb23564da06c358d2623388939bb02f7f3419`. It now changes only local PTY
+headers and implementation. `tvterm-transport.patch` owns all controller changes
+against the same pristine HEAD; the two patches have disjoint paths. Turbo Vision, libvterm, emulator, window/frame/view
 code, key encoding and cell rendering remain unchanged. The retained application
 uses these existing interfaces. Windows is outside this slice and rejected by
 the application build; no Windows lifecycle claim is made.
@@ -51,7 +52,7 @@ cannot hide tracked dependency edits. Root and recursive dependencies with
 even if those files are clean: Git may hide their effective bytes from the diff.
 The guard reads NUL-delimited `git ls-files -v` tags without clearing flags or
 rewriting the index; see [Git's documented tags](https://git-scm.com/docs/git-ls-files).
-Eighteen real-Git fixture cases include both flags at root/dependency/nested levels
+Twenty-four real-Git fixture cases include both flags at root/dependency/nested levels
 and verify rejected files, HEAD, staged entries and flags remain unchanged. Use a
 fresh build directory after changing patch versions. Focused tests use real PTYs,
 wait statuses, kernel thread counts and FD counts, not mocked lifecycle calls.
@@ -64,3 +65,81 @@ The reviewed mutex patch fails with an explicit three-second watchdog; the fixed
 queue separation completes and delivers the scrollbar event to the real emulator.
 Actual desktop verification separately covers finite scrolling output, subsequent
 input/menu movement/resize and confirmed close/quit with child/worker/FD cleanup.
+
+
+The transport seam retains the concrete controller, emulator, view and renderer.
+Owned chunks release borrowed ClientDataRead spans before consumption credit;
+End forces publication and dirty/wakeup before `flushed(sequence)` exposes status.
+A scoped Writer tag identifies synchronous emulator replies and restores User
+before queued UI events. Tagged byte segments and resize markers preserve emission
+order, with 64 KiB / 128-entry intermediate bounds. Transport admission and local
+PTY writes run outside queue/emulator/state locks. Overflow disconnects process
+input explicitly while retained local events remain usable.
+
+`finishPresentation()` cancels local waits and joins outside callbacks; it never
+requests IPC Close. Post-finish local events stay queued, and the existing UI-only
+`stateHasBeenUpdated()` poll pumps them outside state/render callbacks. This keeps
+scrollbar enqueue queue-only. The emulator is destroyed before its nonowning
+Writer and the owned transport. Local factory/finish/status retain PTY behavior;
+the IPC adapter rejects mismatched bindings and atomically gates input/resize/Close
+on its owned endpoint identity. Retained Exited sessions can still request Close.
+
+The source guard takes both disjoint patches atomically, recognizes only pristine
+or the complete exact effective composition, rejects partial/conflicting/staged
+unexpected edits before mutation, and preserves dependency files/index/flags on
+rejection. An old patch composition requires a fresh owned pinned source checkout;
+the guard never repairs or resets it.
+
+
+Input admission Closed is distinct from reader End/Lost: the controller suppresses
+process emission but continues consuming and flushing queued final output. It
+exposes read disconnection only after final endpoint flush acknowledgment, avoiding
+UI finish cancellation racing pending exit publication. Writer byte segments split
+at 32,768 bytes; adapter rejects larger spans before allocating payload storage.
+Guard fixtures compare raw index bytes immediately around the guard, separately
+from semantic source/index/flags snapshots: their own recursive diagnostic Git diff
+may refresh stat cache even with optional locks disabled.
+
+Presentation finish still cancels the endpoint reader without sending IPC Close.
+Bound Close may clean up the same retained authoritative Exited endpoint after
+local cancellation; Lost, retired/replacement, closing/closed and shutdown gates
+remain. Input/resize remain cancelled. Apple lifecycle tests check original owned
+join completion and FDs immediately, report native task count, then require a
+single fixed 100 ms native baseline observation. Negative probes reject an
+unjoined worker, an FD leak and a still-live unowned native worker. This is a
+test measurement boundary, not a Darwin guarantee; Linux immediate count remains.
+
+
+The opt-in real-core native harness is registered only with
+`AGENTVISION_BUILD_CORE=ON`; the shipping app still calls the local factory.
+See [migration acceptance](../docs/go-core/migration-acceptance.md) for the exact
+qualified setup, retained-regression mapping and reproducible OFF/ON commands.
+The native test compiles the exact connection implementation for a read-only
+Credit-completion snapshot, without shipping instrumentation or a public API.
+Its link map verifies single extraction. Producer barriers wait for actual
+consumption/publication and completed Credit before exit; arbitrary wire frames
+coalesce only in queued owned chunks, never in a borrowed span.
+
+
+Task10 round1 native qualification also registers `ipc_terminal_negative`:
+premature core loss and omitted loss-frame publication must fail the native
+application while the outer fixture proves cooked-input/termios restoration.
+Both native tests reuse the existing pyte desktop-fixture dependency in
+`.probe/tools`; CMake sets its PYTHONPATH. Run the focused pair with
+`GODEBUG=execwait=2 GOGC=1 "$CTEST" --test-dir .probe/task10-on -R '^ipc_terminal(_negative)?$' --output-on-failure`.
+Original full-Go native-start failure remains an open gate; copied diagnostics
+are separately labeled and do not replace shipping qualification.
+
+
+The offline native-oracle regression uses the same incremental `pyte.ByteStream`
+as the outer-PTY harness. With the existing desktop-test pyte installation:
+
+```sh
+PYTHONPATH="$PWD/.probe/tools" PYTHONDONTWRITEBYTECODE=1 python3 tests/ipc_terminal_decode.py
+ctest --test-dir <default-build> -R '^(core_process|ipc_terminal_decode)$' --output-on-failure
+```
+
+This offline test checks UTF-8 split boundaries and cells; it does not launch the
+Go core or establish native lifecycle qualification. Retained captures can be
+replayed with `--capture <screen.bin> 1` for a published loss caption or `0` for
+omitted publication. The inherited pinned configure deprecation is deferred.

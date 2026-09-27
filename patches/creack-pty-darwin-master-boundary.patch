@@ -1,0 +1,162 @@
+diff --git a/pty_darwin.go b/pty_darwin.go
+index eadf6ab..18030a0 100644
+--- a/pty_darwin.go
++++ b/pty_darwin.go
+@@ -5,6 +5,7 @@ package pty
+ 
+ import (
+ 	"errors"
++	"fmt"
+ 	"os"
+ 	"syscall"
+ 	"unsafe"
+@@ -23,24 +24,45 @@ func open() (pty, tty *os.File, err error) {
+ 		}
+ 	}()
+ 
+-	sname, err := ptsname(p)
++	t, err := OpenSlaveFromMaster(p)
+ 	if err != nil {
+ 		return nil, nil, err
+ 	}
++	return p, t, nil
++}
+ 
+-	if err := grantpt(p); err != nil {
+-		return nil, nil, err
+-	}
++// OpenSlaveFromMaster borrows master for the Darwin post-master sequence.
++// It never closes or reopens master. Any returned slave belongs to the caller,
++// including one returned with an error. There is no acquisition retry here.
++func OpenSlaveFromMaster(master *os.File) (*os.File, error) {
++	return openSlaveFromMaster(master, slaveOpenOps{ptsname, grantpt, unlockpt, os.OpenFile})
++}
+ 
+-	if err := unlockpt(p); err != nil {
+-		return nil, nil, err
+-	}
++type slaveOpenOps struct {
++	name          func(*os.File) (string, error)
++	grant, unlock func(*os.File) error
++	open          func(string, int, os.FileMode) (*os.File, error)
++}
+ 
+-	t, err := os.OpenFile(sname, os.O_RDWR|syscall.O_NOCTTY, 0)
++func openSlaveFromMaster(master *os.File, ops slaveOpenOps) (*os.File, error) {
++	if master == nil {
++		return nil, errors.New("nil borrowed master")
++	}
++	name, err := ops.name(master)
+ 	if err != nil {
+-		return nil, nil, err
++		return nil, fmt.Errorf("pty name: %w", err)
+ 	}
+-	return p, t, nil
++	if err = ops.grant(master); err != nil {
++		return nil, fmt.Errorf("pty grant: %w", err)
++	}
++	if err = ops.unlock(master); err != nil {
++		return nil, fmt.Errorf("pty unlock: %w", err)
++	}
++	slave, err := ops.open(name, os.O_RDWR|syscall.O_NOCTTY, 0)
++	if err != nil {
++		return slave, fmt.Errorf("pty slave open: %w", err)
++	}
++	return slave, nil
+ }
+ 
+ func ptsname(f *os.File) (string, error) {
+diff --git a/pty_darwin_boundary_test.go b/pty_darwin_boundary_test.go
+new file mode 100644
+index 0000000..4517089
+--- /dev/null
++++ b/pty_darwin_boundary_test.go
+@@ -0,0 +1,88 @@
++//go:build darwin
++
++package pty
++
++import (
++	"errors"
++	"os"
++	"syscall"
++	"testing"
++)
++
++// Catches retries, borrowed-master closes, and loss of a late slave at each phase.
++func TestDarwinBorrowedMasterInjected(t *testing.T) {
++	for _, phase := range []string{"name", "grant", "unlock", "slave", "success"} {
++		t.Run(phase, func(t *testing.T) {
++			master, e := os.CreateTemp(t.TempDir(), "master")
++			if e != nil {
++				t.Fatal(e)
++			}
++			defer master.Close()
++			slave, e := os.CreateTemp(t.TempDir(), "slave")
++			if e != nil {
++				t.Fatal(e)
++			}
++			defer slave.Close()
++			boom := syscall.EIO
++			var calls []string
++			fail := func(s string) error {
++				calls = append(calls, s)
++				if s == phase {
++					return boom
++				}
++				return nil
++			}
++			ops := slaveOpenOps{
++				name: func(f *os.File) (string, error) {
++					if f != master {
++						t.Fatal("master identity")
++					}
++					return "synthetic-slave", fail("name")
++				},
++				grant: func(f *os.File) error {
++					if f != master {
++						t.Fatal("master identity")
++					}
++					return fail("grant")
++				},
++				unlock: func(f *os.File) error {
++					if f != master {
++						t.Fatal("master identity")
++					}
++					return fail("unlock")
++				},
++				open: func(name string, flags int, mode os.FileMode) (*os.File, error) {
++					if name != "synthetic-slave" || flags != os.O_RDWR|syscall.O_NOCTTY || mode != 0 {
++						t.Fatal("slave open arguments")
++					}
++					return slave, fail("slave")
++				}}
++			got, err := openSlaveFromMaster(master, ops)
++			want := map[string]int{"name": 1, "grant": 2, "unlock": 3, "slave": 4, "success": 4}[phase]
++			if len(calls) != want {
++				t.Fatalf("calls=%v", calls)
++			}
++			if phase == "success" {
++				if err != nil || got != slave {
++					t.Fatalf("success: %v %v", got, err)
++				}
++			} else if !errors.Is(err, boom) {
++				t.Fatalf("typed phase error: %v", err)
++			}
++			if phase == "slave" && got != slave {
++				t.Fatal("late slave ownership lost")
++			}
++			if phase != "slave" && phase != "success" && got != nil {
++				t.Fatal("unacquired slave")
++			}
++			if _, e := master.Stat(); e != nil {
++				t.Fatalf("borrowed master closed: %v", e)
++			}
++		})
++	}
++	t.Run("nil-public-api", func(t *testing.T) {
++		if f, e := OpenSlaveFromMaster(nil); e == nil || f != nil {
++			t.Fatal("nil master accepted")
++		}
++	})
++}

@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
 """Validate effective pinned source before applying; never reset existing edits."""
 from pathlib import Path
+import os
 import subprocess
 import sys
 
-source, patch = (Path(arg).resolve() for arg in sys.argv[1:])
-accepted = patch.read_bytes()
+source, *patches = (Path(arg).resolve() for arg in sys.argv[1:])
+if not patches: sys.exit('No downstream patches supplied')
+# Patches are disjoint HEAD-relative diffs. Reject duplicate paths up front;
+# canonical Git ordering gives the exact composed effective source diff.
+blocks = {}
+for patch in patches:
+    raw = patch.read_bytes()
+    for part in raw.split(b'diff --git ')[1:]:
+        header = part.split(b'\n', 1)[0]
+        if header in blocks:
+            sys.exit('Conflicting patch composition; source left unchanged')
+        blocks[header] = b'diff --git ' + part
+accepted = b''.join(blocks[key] for key in sorted(blocks))
 
 def git(repo, *args):
-    return subprocess.check_output(['git', '-C', str(repo), *args])
+    return subprocess.check_output(['git', '-C', str(repo), *args],
+                                   env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
 
 def effective_diff(repo):
     # diff trusts these index bits even if compiler-visible bytes changed.
@@ -44,10 +57,10 @@ if actual not in (b'', accepted):
 
 base = ['git', '-C', str(source), 'apply']
 # Validate before applying, so rejection cannot add even the accepted patch.
-check = base + (['--reverse'] if actual else []) + ['--check', str(patch)]
+check = base + (['--reverse'] if actual else []) + ['--check', *map(str, patches)]
 if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
     sys.exit('Downstream patch does not match pinned source; source left unchanged')
 if not actual:
-    subprocess.run(base + [str(patch)], check=True)
+    subprocess.run(base + list(map(str, patches)), check=True)
 if effective_diff(source) != accepted:
     sys.exit('Applied source does not equal the exact accepted patch')

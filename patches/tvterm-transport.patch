@@ -1,0 +1,611 @@
+diff --git a/include/tvterm/termctrl.h b/include/tvterm/termctrl.h
+index a18c9b1..bc870dd 100644
+--- a/include/tvterm/termctrl.h
++++ b/include/tvterm/termctrl.h
+@@ -8,10 +8,32 @@
+ #include <tvterm/pty.h>
+ #include <atomic>
+ #include <memory>
++#include <thread>
++#include <vector>
+ 
+ namespace tvterm
+ {
+ 
++enum class InputOrigin { User, EmulatorReply };
++enum class EnqueueResult { Queued, Closed, Overflow };
++struct TransportChunk {
++    enum class Kind { Data, End, Lost };
++    Kind kind {Kind::Lost};
++    std::vector<char> bytes;
++    uint64_t sequence {0};
++};
++class SessionTransport {
++public:
++    virtual ~SessionTransport() = default;
++    virtual EnqueueResult enqueueInput(TSpan<const char>, InputOrigin) noexcept = 0;
++    virtual TransportChunk readChunk() noexcept = 0;
++    virtual void consumed(size_t) noexcept {}
++    virtual void flushed(uint64_t) noexcept {}
++    virtual void resize(TPoint) noexcept = 0;
++    virtual void cancelLocal() noexcept = 0;
++};
++class LocalSessionTransport;
++
+ class TerminalController
+ {
+ public:
+@@ -21,11 +43,24 @@ public:
+     static TerminalController *create( TPoint size,
+                                      TerminalEmulatorFactory &terminalEmulatorFactory,
+                                      void (&onError)(const char *reason) ) noexcept;
++    static TerminalController *createWithTransport(TPoint, TerminalEmulatorFactory &,
++                                                   std::unique_ptr<SessionTransport>) noexcept;
++    // UI thread, outside callbacks: stop local waits, join and retain emulator.
++    // Does not request backend Close. Local events continue via UI polling.
++    void finishPresentation() noexcept;
+     // Takes ownership over 'this'.
+     void shutDown() noexcept;
++#if !defined(_WIN32)
++    // UI-thread only, outside lockState callbacks. Keeps retained terminal state.
++    // Idempotently stops, joins, closes and reaps; returns raw wait status.
++    int finish() noexcept;
++    pid_t childPid() const noexcept;
++    int childWaitStatus() const noexcept;
++#endif
+ 
+     void sendEvent(const TerminalEvent &event) noexcept;
+ 
++    // UI-thread only, outside lockState/render callbacks; pumps retained local events.
+     bool stateHasBeenUpdated() noexcept;
+     bool clientIsDisconnected() noexcept;
+ 
+@@ -38,25 +73,28 @@ private:
+ 
+     struct TerminalEventLoop;
+ 
+-    PtyMaster ptyMaster;
++    std::unique_ptr<SessionTransport> transport;
++    LocalSessionTransport *localTransport {nullptr};
+     Mutex<TerminalState> terminalState;
+     TerminalEventLoop &eventLoop;
+     TerminalEmulator &terminalEmulator;
+ 
+     std::atomic<bool> updated {false};
+     std::atomic<bool> disconnected {false};
++    std::atomic<bool> inputClosed {false}; // Sealed input is independent of queued final reads.
+ 
++#if !defined(_WIN32)
++    std::thread writerThread;
++    std::thread readerThread;
++    bool finished {false};
++#else
+     std::shared_ptr<TerminalController> selfOwningPtr;
++#endif
+ 
+-    TerminalController(TPoint, TerminalEmulatorFactory &, PtyDescriptor) noexcept;
++    TerminalController(TPoint, TerminalEmulatorFactory &, std::unique_ptr<SessionTransport>) noexcept;
+     ~TerminalController();
+ };
+ 
+-inline bool TerminalController::stateHasBeenUpdated() noexcept
+-{
+-    return updated.exchange(false) == true;
+-}
+-
+ inline bool TerminalController::clientIsDisconnected() noexcept
+ {
+     return disconnected;
+diff --git a/source/tvterm-core/termctrl.cc b/source/tvterm-core/termctrl.cc
+index 3010d22..56fcef9 100644
+--- a/source/tvterm-core/termctrl.cc
++++ b/source/tvterm-core/termctrl.cc
+@@ -12,15 +12,74 @@
+ namespace tvterm
+ {
+ 
+-class GrowArrayWriter final : public Writer
+-{
++// The existing Writer stays nonowning to the emulator. Tags follow emissions,
++// never parsed terminal bytes. Adjacent same-origin writes may coalesce.
++class ClientDataWriter final : public Writer {
+ public:
++    struct Segment { std::vector<char> bytes; InputOrigin origin; bool isResize {false}; TPoint size {}; };
++    using Segments = std::vector<Segment>;
++    Segments segments;
++    InputOrigin origin {InputOrigin::User};
++    bool overflow {false};
++    size_t staged {0};
++    struct ReplyScope {
++        ClientDataWriter *writer;
++        InputOrigin previous;
++        explicit ReplyScope(ClientDataWriter &w) noexcept : writer(&w), previous(w.origin) { w.origin = InputOrigin::EmulatorReply; }
++        ReplyScope(const ReplyScope &) = delete;
++        ReplyScope(ReplyScope &&r) noexcept : writer(r.writer), previous(r.previous) { r.writer = nullptr; }
++        ~ReplyScope() { if (writer) writer->origin = previous; }
++    };
++    ReplyScope replyScope() noexcept { return ReplyScope(*this); }
++    void resize(TPoint size) noexcept {
++        if (segments.size() >= 128) { overflow = true; return; }
++        try { Segment segment; segment.origin = InputOrigin::User; segment.isResize = true; segment.size = size; segments.push_back(std::move(segment)); }
++        catch (...) { overflow = true; }
++    }
++    void write(TSpan<const char> data) noexcept override {
++        if (data.empty()) return;
++        // Bound intermediary storage too, independently of transport admission.
++        if (data.size() > 65536 - staged || segments.size() >= 128) { overflow = true; return; }
++        try {
++            size_t offset = 0;
++            while (offset < data.size()) {
++                if (segments.empty() || segments.back().origin != origin ||
++                    segments.back().isResize || segments.back().bytes.size() == 32768) {
++                    if (segments.size() >= 128) { overflow = true; return; }
++                    segments.push_back({{}, origin});
++                }
++                auto &bytes = segments.back().bytes;
++                size_t count = std::min<size_t>(32768 - bytes.size(), data.size() - offset);
++                bytes.insert(bytes.end(), data.begin() + offset, data.begin() + offset + count);
++                offset += count; staged += count;
++            }
++        } catch (...) { overflow = true; }
++    }
++};
+ 
+-    GrowArray buffer;
+-
+-    void write(TSpan<const char> data) noexcept override
+-    {
+-        buffer.push(&data[0], data.size());
++// Only this compatibility adapter owns local PTY lifecycle. The controller
++// owns a transport for either mode; IPC never becomes a PtyDescriptor.
++class LocalSessionTransport final : public SessionTransport {
++public:
++    PtyMaster master;
++    explicit LocalSessionTransport(PtyDescriptor d) noexcept : master(d) {}
++    EnqueueResult enqueueInput(TSpan<const char> b, InputOrigin) noexcept override {
++        return master.writeToClient(b) ? EnqueueResult::Queued : EnqueueResult::Closed;
++    }
++    TransportChunk readChunk() noexcept override {
++        TransportChunk c;
++        try { c.bytes.resize(4096); } catch (...) { return c; }
++        size_t n = 0;
++        if (!master.readFromClient({c.bytes.data(), c.bytes.size()}, n) || !n) {
++            c.bytes.clear(); c.kind = TransportChunk::Kind::End;
++        } else { c.bytes.resize(n); c.kind = TransportChunk::Kind::Data; }
++        return c;
++    }
++    void resize(TPoint p) noexcept override { master.resizeClient(p); }
++    void cancelLocal() noexcept override {
++#if !defined(_WIN32)
++        master.requestStop();
++#endif
+     }
+ };
+ 
+@@ -41,17 +100,19 @@ struct TerminalController::TerminalEventLoop
+ 
+     TerminalController &ctrl;
+ 
+-    // Used for granting exclusive access to TerminalEventLoop's fields and the
+-    // TerminalEmulator.
++    // Serializes emulator, timeout and viewport fields. Queue/wakeup fields
++    // use queueMutex, which must not be held during emulator/state locking.
+     std::mutex mutex;
+ 
+     // Used for indicating whether event processing should be stopped because
+     // the terminal was shut down by the application.
+-    bool terminated {false};
++    std::atomic<bool> terminated {false};
+ 
+-    // Used for sending events from the main thread to the TerminalEventLoop's
+-    // threads. Has its own mutex to avoid blocking the main thread for long.
+-    Mutex<std::queue<TerminalEvent>> eventQueue;
++    // UI callbacks may hold terminal state. Queue/wakeup locking must never
++    // acquire the emulator mutex or state; workers release it before publication.
++    std::mutex queueMutex;
++    std::queue<TerminalEvent> eventQueue;
++    bool writerWake {true}; // Predicate mutations and waits share queueMutex.
+ 
+     // Used for waking up the WriterLoop a short time after data was received
+     // by the ReaderLoop thread.
+@@ -63,19 +124,33 @@ struct TerminalController::TerminalEventLoop
+     std::condition_variable condVar;
+ 
+     // Used for storing data to be sent to the client.
+-    GrowArrayWriter clientDataWriter;
++    ClientDataWriter clientDataWriter;
+ 
+     // Used for handling ViewportResize events properly.
+     bool viewportResized {false};
+     TPoint viewportSize {};
+ 
++    void wakeWriter() noexcept {
++        {
++            std::lock_guard<std::mutex> lock(queueMutex);
++            writerWake = true;
++        }
++        condVar.notify_one();
++    }
++    void stop() noexcept {
++        {
++            std::lock_guard<std::mutex> lock(queueMutex);
++            terminated = true;
++        }
++        condVar.notify_all();
++    }
+     void runWriterLoop() noexcept;
+     void runReaderLoop() noexcept;
+     void processEvents() noexcept;
+     void updateState(bool &) noexcept;
+     void updateTimeouts() noexcept;
+ 
+-    void writePendingData(GrowArray &, bool &) noexcept;
++    void writePendingData(ClientDataWriter::Segments &, bool &) noexcept;
+     void notifyMainThread() noexcept;
+ };
+ 
+@@ -88,10 +163,27 @@ TerminalController *TerminalController::create( TPoint size,
+                      terminalEmulatorFactory.getCustomEnvironment(), onError ) )
+         return nullptr;
+ 
+-    auto &terminalController = *new TerminalController( size,
+-                                                        terminalEmulatorFactory,
+-                                                        ptyDescriptor );
++    auto transport = std::unique_ptr<LocalSessionTransport>(new LocalSessionTransport(ptyDescriptor));
++    auto *local = transport.get();
++    auto *controller = createWithTransport(size, terminalEmulatorFactory, std::move(transport));
++    controller->localTransport = local;
++    return controller;
++}
+ 
++TerminalController *TerminalController::createWithTransport(TPoint size,
++    TerminalEmulatorFactory &terminalEmulatorFactory, std::unique_ptr<SessionTransport> transport) noexcept
++{
++    if (!transport) return nullptr;
++    auto &terminalController = *new TerminalController(size, terminalEmulatorFactory, std::move(transport));
++
++#if !defined(_WIN32)
++    terminalController.writerThread = std::thread([&terminalController] {
++        terminalController.eventLoop.runWriterLoop();
++    });
++    terminalController.readerThread = std::thread([&terminalController] {
++        terminalController.eventLoop.runReaderLoop();
++    });
++#else
+     // 'this' will be deleted when:
+     // 1. 'shutDown()' is invoked from the main thread.
+     // 2. Both the WriterLoop and ReaderLoop threads exit.
+@@ -108,23 +200,77 @@ TerminalController *TerminalController::create( TPoint size,
+         owningPtr->eventLoop.runReaderLoop();
+     }).detach();
+ 
++#endif
++
+     return &terminalController;
+ }
+ 
+-void TerminalController::shutDown() noexcept
++void TerminalController::finishPresentation() noexcept
+ {
+-    {
+-        std::lock_guard<std::mutex> lock(eventLoop.mutex);
+-        eventLoop.terminated = true;
++#if !defined(_WIN32)
++    if (!finished) {
++        eventLoop.stop();
++        transport->cancelLocal();
++        if (readerThread.joinable()) readerThread.join();
++        if (writerThread.joinable()) writerThread.join();
++        disconnected = true;
++        finished = true;
+     }
+-    eventLoop.condVar.notify_one();
+-    selfOwningPtr.reset(); // May delete 'this'.
++#else
++    eventLoop.stop(); transport->cancelLocal();
++#endif
++}
++#if !defined(_WIN32)
++int TerminalController::finish() noexcept {
++    finishPresentation();
++    if (localTransport) localTransport->master.disconnect();
++    return childWaitStatus();
++}
++pid_t TerminalController::childPid() const noexcept {
++    return localTransport ? localTransport->master.childPid() : -1;
++}
++int TerminalController::childWaitStatus() const noexcept {
++    return localTransport ? localTransport->master.childWaitStatus() : -2;
++}
++#endif
++bool TerminalController::stateHasBeenUpdated() noexcept {
++#if !defined(_WIN32)
++    bool pending = false;
++    if (finished) {
++        std::lock_guard<std::mutex> queue(eventLoop.queueMutex);
++        pending = !eventLoop.eventQueue.empty();
++    }
++    if (pending) {
++        bool changed = false;
++        {
++            std::lock_guard<std::mutex> lock(eventLoop.mutex);
++            eventLoop.processEvents();
++            eventLoop.currentTimeout = {};
++            eventLoop.updateState(changed);
++            eventLoop.clientDataWriter.segments.clear();
++            eventLoop.clientDataWriter.staged = 0;
++        }
++        if (changed) updated = true;
++    }
++#endif
++    return updated.exchange(false);
++}
++
++void TerminalController::shutDown() noexcept
++{
++#if !defined(_WIN32)
++    finish();
++    delete this;
++#else
++    eventLoop.stop();
++    selfOwningPtr.reset();
++#endif
+ }
+ 
+ TerminalController::TerminalController( TPoint size,
+                                         TerminalEmulatorFactory &terminalEmulatorFactory,
+-                                        PtyDescriptor ptyDescriptor ) noexcept :
+-    ptyMaster(ptyDescriptor),
++                                        std::unique_ptr<SessionTransport> aTransport ) noexcept :
++    transport(std::move(aTransport)),
+     eventLoop(*new TerminalEventLoop {*this}),
+     terminalEmulator(terminalEmulatorFactory.create(size, eventLoop.clientDataWriter))
+ {
+@@ -138,90 +284,91 @@ TerminalController::~TerminalController()
+ 
+ void TerminalController::sendEvent(const TerminalEvent &event) noexcept
+ {
+-    eventLoop.eventQueue.lock([&] (auto &eventQueue) {
+-        eventQueue.push(event);
+-    });
++    {
++        std::lock_guard<std::mutex> lock(eventLoop.queueMutex);
++        // Local scroll/copy/viewport events remain useful after End/Lost/finish.
++        if (inputClosed || disconnected || eventLoop.terminated) {
++            if (event.type != TerminalEventType::ScrollBackOffsetChange &&
++                event.type != TerminalEventType::CopySelection &&
++                event.type != TerminalEventType::ViewportResize) return;
++        }
++        eventLoop.eventQueue.push(event);
++    }
+     eventLoop.condVar.notify_one();
+ }
+ 
+ void TerminalController::TerminalEventLoop::runWriterLoop() noexcept
+ {
+-    GrowArray outputBuffer;
++    ClientDataWriter::Segments outputBuffer;
++    TimePoint nextWake {};
+     while (true)
+     {
+-        bool updated = false;
+         {
+-            std::unique_lock<std::mutex> lock(mutex);
+-            if (currentTimeout != TimePoint())
+-                condVar.wait_until(lock, currentTimeout);
+-            else
+-                // Waiting until 'TimePoint()' is not always supported,
+-                // so use a regular 'wait'.
+-                condVar.wait(lock);
+-
+-            if (terminated)
+-            {
+-                ctrl.ptyMaster.disconnect();
+-                break;
+-            }
++            std::unique_lock<std::mutex> lock(queueMutex);
++            auto ready = [&] { return terminated || writerWake || !eventQueue.empty(); };
++            if (nextWake == TimePoint()) condVar.wait(lock, ready);
++            else condVar.wait_until(lock, nextWake, ready);
++            if (terminated) break;
++            writerWake = false;
++        } // Never hold queueMutex while acquiring emulator/state locks.
+ 
++        bool updated = false;
++        {
++            std::lock_guard<std::mutex> lock(mutex);
++            if (terminated) break;
+             processEvents();
+             updateState(updated);
+-
+-            outputBuffer = std::move(clientDataWriter.buffer);
++            nextWake = currentTimeout; // Emulator mutex owns timeout fields.
++            outputBuffer = std::move(clientDataWriter.segments);
++            clientDataWriter.staged = 0;
++            if (clientDataWriter.overflow) { ctrl.disconnected = true; updated = true; }
+         }
+ 
+         writePendingData(outputBuffer, updated);
+-
+-        if (updated)
+-            notifyMainThread();
++        if (updated) notifyMainThread();
+     }
++#if defined(_WIN32)
++    if (ctrl.localTransport) ctrl.localTransport->master.disconnect();
++#endif
+ }
+ 
+ void TerminalController::TerminalEventLoop::runReaderLoop() noexcept
+ {
+-    static thread_local char inputBuffer alignas(4096) [readBufSize];
+-    while (true)
+-    {
+-        size_t bytesRead;
+-        bool readOk = ctrl.ptyMaster.readFromClient(inputBuffer, bytesRead);
+-
+-        if (!readOk || bytesRead == 0)
+-        {
+-            ctrl.disconnected = true;
++    while (!terminated) {
++        auto chunk = ctrl.transport->readChunk(); // No emulator/state/queue lock.
++        if (terminated) break;
++        if (chunk.kind != TransportChunk::Kind::Data) {
++            {
++                std::lock_guard<std::mutex> lock(mutex);
++                bool updated = false;
++                currentTimeout = {};
++                updateState(updated);
++            }
++            notifyMainThread();
++            if (chunk.kind == TransportChunk::Kind::End)
++                ctrl.transport->flushed(chunk.sequence); // Publication precedes status.
++            ctrl.disconnected = true; // UI finish cannot cancel before flushed().
+             notifyMainThread();
++            wakeWriter(); // Retain local interactions; finishPresentation joins.
+             break;
+         }
+-
+-        if (terminated)
+-            // We are expected to consume all of the client's data, so keep
+-            // reading while we can.
+-            continue;
+-
+         bool updated = false;
+         {
+             std::lock_guard<std::mutex> lock(mutex);
+-
+-            TerminalEvent event;
+-            event.type = TerminalEventType::ClientDataRead;
+-            event.clientDataRead = {inputBuffer, bytesRead};
+-            ctrl.terminalEmulator.handleEvent(event);
+-
++            {
++                TerminalEvent event;
++                event.type = TerminalEventType::ClientDataRead;
++                event.clientDataRead = {chunk.bytes.data(), chunk.bytes.size()};
++                auto origin = clientDataWriter.replyScope();
++                ctrl.terminalEmulator.handleEvent(event);
++            } // Borrowed event span and reply origin end before credit.
+             updateTimeouts();
+-
+-            // We also do these in the ReaderLoop thread because locking may be
+-            // unfair. In a situation where we continously receive data from the
+-            // client, the ReaderLoop thread may be able to acquire the lock
+-            // several times before the WriterLoop wakes up.
+-            processEvents();
++            processEvents(); // User events regain User origin in the same iteration.
+             updateState(updated);
+         }
+-
+-        if (updated)
+-            notifyMainThread();
+-        // Notify the WriterLoop so that it can use the new timeouts and write
+-        // any pending data.
+-        condVar.notify_one();
++        ctrl.transport->consumed(chunk.bytes.size());
++        if (updated) notifyMainThread();
++        wakeWriter();
+     }
+ }
+ 
+@@ -233,13 +380,14 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+         bool hasEvent;
+         TerminalEvent event;
+ 
+-        eventQueue.lock([&] (auto &eventQueue) {
++        {
++            std::lock_guard<std::mutex> lock(queueMutex);
+             if ((hasEvent = !eventQueue.empty()))
+             {
+                 event = eventQueue.front();
+                 eventQueue.pop();
+             }
+-        });
++        } // Release before emulator calls/state publication.
+ 
+         if (!hasEvent)
+             break;
+@@ -247,8 +395,10 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+         switch (event.type)
+         {
+             case TerminalEventType::ViewportResize:
+-                // Do not resize the client yet. We will handle this later.
+                 viewportSize = {event.viewportResize.x, event.viewportResize.y};
++                ctrl.terminalEmulator.handleEvent(event);
++                clientDataWriter.resize(viewportSize); // Ordered with Writer emissions.
++                currentTimeout = {}; // Silent child cannot defer desired surface.
+                 viewportResized = true;
+                 break;
+ 
+@@ -262,29 +412,11 @@ void TerminalController::TerminalEventLoop::processEvents() noexcept
+ void TerminalController::TerminalEventLoop::updateState(bool &updated) noexcept
+ // Pre: 'this->mutex' is locked.
+ {
+-    if (Clock::now() > currentTimeout)
+-    {
+-        updated = true;
+-        currentTimeout = TimePoint();
+-        maxReadTimeout = TimePoint();
+-
+-        ctrl.lockState([&] (auto &state) {
+-            ctrl.terminalEmulator.updateState(state);
+-        });
+-    }
+-
+-    if (currentTimeout == TimePoint() && viewportResized)
+-    {
+-        // Handle the resize only once we reach a timeout and after updating
+-        // the TerminalState, because the client is now likely drawn properly.
++    if (viewportResized || Clock::now() > currentTimeout) {
+         viewportResized = false;
+-
+-        TerminalEvent event;
+-        event.type = TerminalEventType::ViewportResize;
+-        event.viewportResize = {viewportSize.x, viewportSize.y};
+-
+-        ctrl.terminalEmulator.handleEvent(event);
+-        ctrl.ptyMaster.resizeClient(viewportSize);
++        updated = true;
++        currentTimeout = {}; maxReadTimeout = {};
++        ctrl.lockState([&](auto &state) { ctrl.terminalEmulator.updateState(state); });
+     }
+ }
+ 
+@@ -302,20 +434,25 @@ void TerminalController::TerminalEventLoop::updateTimeouts() noexcept
+                             maxReadTimeout );
+ }
+ 
+-void TerminalController::TerminalEventLoop::writePendingData(GrowArray &outputBuffer, bool &updated) noexcept
+-// Pre: 'this->mutex' needs not be locked.
++void TerminalController::TerminalEventLoop::writePendingData(ClientDataWriter::Segments &outputBuffer, bool &updated) noexcept
++// No emulator/state/queue lock during local PTY writes or transport admission.
+ {
+-    if (outputBuffer.size() > 0)
+-    {
+-        if ( !ctrl.disconnected &&
+-             !ctrl.ptyMaster.writeToClient({outputBuffer.data(), outputBuffer.size()}) )
+-        {
+-            ctrl.disconnected = true;
+-            updated = true;
++    for (auto &segment : outputBuffer) {
++        if (ctrl.inputClosed || ctrl.disconnected) break;
++        if (segment.isResize) ctrl.transport->resize(segment.size);
++        else {
++            auto result = ctrl.transport->enqueueInput(
++                {segment.bytes.data(), segment.bytes.size()}, segment.origin);
++            if (result != EnqueueResult::Queued) {
++                ctrl.inputClosed = true;
++                // Closed may mean sealed while final output is still queued.
++                // Only read End/Lost publishes presentation completion.
++                if (result == EnqueueResult::Overflow) ctrl.disconnected = true;
++                updated = true;
++            }
+         }
+-
+-        outputBuffer.clear();
+     }
++    outputBuffer.clear();
+ }
+ 
+ void TerminalController::TerminalEventLoop::notifyMainThread() noexcept
