@@ -76,7 +76,12 @@ if(BUILD_TESTING)
         add_test(NAME ipc_terminal COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_pty.py" $<TARGET_FILE:ipc_terminal_test>
             --output "${CMAKE_CURRENT_BINARY_DIR}/ipc-terminal-evidence")
-        set_tests_properties(ipc_terminal PROPERTIES TIMEOUT 190)
+        add_test(NAME ipc_terminal_negative COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_pty.py" $<TARGET_FILE:ipc_terminal_test>
+            --output "${CMAKE_CURRENT_BINARY_DIR}/ipc-terminal-negative-evidence"
+            --cases premature-loss no-caption)
+        set_tests_properties(ipc_terminal ipc_terminal_negative PROPERTIES TIMEOUT 190
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
     endif()
     add_executable(core_protocol_test tests/core_protocol.cpp)
     target_link_libraries(core_protocol_test PRIVATE agentvision-core-client)

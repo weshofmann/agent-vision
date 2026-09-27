@@ -201,3 +201,44 @@ claim that the exact failed race executable was recovered. Later documentation
 changes do not alter tested compiler inputs. Failed compiler/fixture attempts,
 including native7–9 stale-binary runs, remain explicitly invalid for changed-source
 coverage. The final independent Task10 and whole-PR reviews remain outstanding.
+
+
+### Task10 round1 review fixes (gate remains blocked)
+
+[Independent review T10-R1–R3](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5851652877)
+requires further native qualification. The original full Go qualification remains
+39/40; a newly authorized copied full-module race diagnostic reproduced errno-6
+inside `pty.Open`, before termios/resize/nonblock/shell launch. In that diagnostic,
+thirteen resources were acquired before the fatal error and existing cleanup
+returned to FD4/goroutines2. This is diagnostic evidence, not passing shipping-Go
+qualification or a cause/host-only conclusion; exact inner operation remains
+unknown. All race executables/completed build work were retained before Go-driver
+execution. The first copied full-module attempt lacked golden fixtures and is
+explicitly invalid; its evidence remains separate from the valid replacement.
+
+T10-R2 now requires successful sixteen-cycle completion, sixteen Credit barriers
+and sixteen A completions plus a latched intentional direct-core kill or Shutdown.
+Any earlier restoration/contact failure fails qualification while still restoring
+and joining. Completion requires exact normal exit0/contactNone or intentional
+SIGKILL9/contactEOF. The premature-loss probe fails at cycle0/credits0, restores
+termios/cooked input and joins workers; the previous harness falsely returned
+success and the focused pre-fix RED preserves that observation.
+
+T10-R3 corrects the earlier visible-caption claim: the archived original loss
+capture did **not** display the caption. Its workload/resource/restoration evidence
+remains valid. The corrected harness uses the pinned `TEventQueue::waitForEvents`
+display/FPS path while waiting boundedly for one outer-key acknowledgment. The
+outer decoder sends that key only after actual terminal cells contain
+`authority/contact lost`; native consumes it before teardown, so a later screen
+erase cannot precede the observed caption. No sleep/title-getter substitute or
+Go-session input is used. Removing publication fails the probe and safely restores.
+
+Focused native tests passed2/2 in25.91s: intended normal+loss16MiB runs16.84s and
+premature-loss/omitted-publication negatives9.06s. Positive restoration ACKs41ms
+normal/14ms loss; premature-loss failure15ms; omitted-publication failure1027ms
+uses its one-second display observation deadline within the unchanged two-second
+restoration watchdog, and is not a positive100ms restoration claim. All captures,
+counts and failed attempts remain ignored durable evidence. DefaultOFF36/36
+passing evidence is retained with all613 actual default compiler inputs verified
+byte-identical; only opt-in native test registration/oracles changed. Task10 remains
+open pending scoped re-review and explicit disposition of T10-R1.

@@ -43,6 +43,7 @@
 #define Uses_TDeskTop
 #define Uses_TKeys
 #define Uses_TEvent
+#define Uses_TEventQueue
 #include <tvision/tv.h>
 using namespace agentvision;
 using Clock = std::chrono::steady_clock;
@@ -233,11 +234,14 @@ class App final : public TApplication {
     PresentationWindow *wa = nullptr, *wb = nullptr;
     pid_t corePID = 0;
     int step = 0, cycle = 0;
-    bool loss, failed = false;
+    bool loss, prematureLoss, suppressCaption, failed = false;
+    bool workloadCompleted = false, intentionalLoss = false, shutdownIssued = false;
+    int creditBarriers = 0, aCompletions = 0;
     std::string failure;
     Clock::time_point deadline = Clock::now() + std::chrono::seconds(15), quiet;
-    App(Restore &r, std::ofstream &l, bool lost)
-        : TProgInit(nullptr, nullptr, &initDeskTop), restore(r), log(l), loss(lost) {
+    App(Restore &r, std::ofstream &l, const std::string &mode)
+        : TProgInit(nullptr, nullptr, &initDeskTop), restore(r), log(l), loss(mode != "normal"),
+          prematureLoss(mode == "premature-loss"), suppressCaption(mode == "no-caption") {
         auto result = CoreConnection::start(REAL_CORE, [&] { restore.callback(); });
         core = result.connection;
         check(bool(core), "real core start");
@@ -343,6 +347,11 @@ class App final : public TApplication {
         {
             std::lock_guard<std::mutex> l(restore.mutex);
             if (restore.requested) {
+                if (!workloadCompleted || (loss ? !intentionalLoss : !shutdownIssued)) {
+                    failed = true;
+                    failure = "premature restoration/contact loss before workload completion";
+                    log << "FAIL " << failure << " cycle=" << cycle << '\n';
+                }
                 endModal(cmQuit);
                 return;
             }
@@ -369,6 +378,8 @@ class App final : public TApplication {
                         wb = make(e.session, b, true);
                     }
                 } else if (e.kind == ConnectionEvent::Kind::Lost) {
+                    check(workloadCompleted && intentionalLoss,
+                          "premature contact loss before intentional trigger");
                     if (wa)
                         wa->lost = true;
                     if (wb)
@@ -379,6 +390,11 @@ class App final : public TApplication {
             case 1:
                 if (wa && wb && has(a, "IPC_READY") && (cycle > 0 || has(b, "IPC_READY"))) {
                     resources(log, "started", cycle, corePID);
+                    if (prematureLoss) {
+                        check(kill(corePID, SIGKILL) == 0, "probe kills only direct core");
+                        advance();
+                        return;
+                    }
                     type(wa, "dsr\n");
                     advance();
                 }
@@ -435,6 +451,7 @@ class App final : public TApplication {
                         break;
                     log << "CREDIT_COMPLETE cycle=" << cycle
                         << " identity=current raw=0 pending=0 ticket=0\n";
+                    ++creditBarriers;
                     resources(log, "consumed", cycle, corePID);
                     check(wa->transport.ipc.metadata().state == SessionState::Running,
                           "producer remains alive at consumption barrier");
@@ -487,6 +504,7 @@ class App final : public TApplication {
                         return false;
                     });
                     check(finalCells, "actual retained final marker accessible in emulator state");
+                    ++aCompletions;
                     local(wa, a);
                     check(std::string(wa->getTitle(0)).find("exited 7") != std::string::npos,
                           "typed exit display");
@@ -526,9 +544,13 @@ class App final : public TApplication {
                         step = 1;
                         deadline = Clock::now() + std::chrono::seconds(15);
                     } else if (loss) {
+                        workloadCompleted = true;
                         check(kill(corePID, SIGKILL) == 0, "test kills only owned core");
+                        intentionalLoss = true;
                         advance();
                     } else {
+                        workloadCompleted = true;
+                        shutdownIssued = true;
                         core->shutdown();
                         advance();
                     }
@@ -556,21 +578,33 @@ class App final : public TApplication {
         }
     }
     void stopPresentation() {
-        if (wa) {
-            wa->lost = loss || failed;
-            finish(wa);
-            local(wa, a);
+        for (auto *w : {wa, wb}) {
+            if (!w)
+                continue;
+            finish(w);
+            local(w, w == wa ? a : b);
+            w->lost = w->transport.ipc.metadata().state == SessionState::Lost;
         }
-        if (wb) {
-            wb->lost = loss || failed;
-            finish(wb);
-            local(wb, b);
-            wb->frame->drawView();
-            if (loss)
-                check(std::string(wb->getTitle(0)).find("authority/contact lost") !=
-                              std::string::npos &&
-                          wb->transport.ipc.metadata().state == SessionState::Lost,
-                      "loss is contact/authority, never fabricated exit");
+        if (loss && workloadCompleted && wb) {
+            check(wb->transport.ipc.metadata().state == SessionState::Lost,
+                  "loss is contact/authority, never fabricated exit");
+            if (!suppressCaption)
+                wb->frame->drawView();
+            // Actual pinned event waits flush buffered display through FPS gating.
+            // The outer decoder acknowledges only a caption in real terminal cells.
+            auto until = Clock::now() + std::chrono::seconds(1);
+            bool displayed = false;
+            while (Clock::now() < until && !displayed) {
+                TEventQueue::waitForEvents(20);
+                TEvent event{};
+                event.getKeyEvent();
+                displayed = event.what == evKeyDown && event.keyDown.charScan.charCode == '~';
+            }
+            if (!displayed) {
+                failed = true;
+                failure = "loss caption publication acknowledgment missing";
+            }
+            log << "DISPLAY acknowledged=" << displayed << '\n';
         }
     }
 };
@@ -581,9 +615,14 @@ int main(int argc, char **argv) {
     std::ofstream log(argv[2]);
     Restore restore;
     try {
-        App app(restore, log, std::string(argv[1]) == "loss");
+        App app(restore, log, argv[1]);
         app.run();
-        app.stopPresentation();
+        try {
+            app.stopPresentation();
+        } catch (const std::exception &e) {
+            app.failed = true;
+            app.failure = e.what();
+        }
         app.shutDown();
         app.suspend();
         // Real Turbo Vision teardown restores the outer terminal before ACK.
@@ -602,8 +641,25 @@ int main(int argc, char **argv) {
             << " core=" << int(completion.core.kind) << " value=" << completion.core.value
             << " graceful=" << completion.graceful << '\n';
         check(!restore.timeout, "bounded UI restoration acknowledgement");
+        log << "WORKLOAD completed=" << app.workloadCompleted
+            << " intentional_loss=" << app.intentionalLoss << " cycles=" << app.cycle
+            << " credits=" << app.creditBarriers << " A_completed=" << app.aCompletions << '\n';
         check(!app.failed, app.failure.c_str());
-        check(completion.graceful != app.loss, "normal Shutdown versus core loss completion");
+        check(app.workloadCompleted && app.cycle == 16 && app.creditBarriers == 16 &&
+                  app.aCompletions == 16,
+              "all sixteen workload/credit/completion gates");
+        if (app.loss)
+            check(app.intentionalLoss && !completion.graceful &&
+                      completion.contactError == ContactError::EOFReached &&
+                      completion.core.kind == CoreCompletion::Kind::Signaled &&
+                      completion.core.value == SIGKILL,
+                  "intentional direct-core SIGKILL and EOF authority loss");
+        else
+            check(app.shutdownIssued && completion.graceful &&
+                      completion.contactError == ContactError::None &&
+                      completion.core.kind == CoreCompletion::Kind::Exited &&
+                      completion.core.value == 0,
+                  "normal Shutdown authoritative direct-core exit0");
         log << "PASS actual presentation workers, UI restoration acknowledged, core joined\n";
         return 0;
     } catch (const std::exception &e) {
