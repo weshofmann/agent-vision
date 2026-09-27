@@ -531,22 +531,15 @@ func TestCancelledSpawnReturnsOwnedResources(t *testing.T) {
 		starts++
 		child, cleanup, e := startDarwinChild(c, s)
 		actualChild = child
+		registerKnownFixtureChildCleanup(t.Cleanup, func(e error) { t.Errorf("known native-returned child cleanup: %v", e) }, cleanup)
 		if child != nil {
 			cancel()
 		}
 		return child, cleanup, e
 	}
 	r, e := (DarwinSpawner{ops: &ops}).Spawn(ctx, config("/bin/sh"))
-	t.Cleanup(func() {
-		if r == nil {
-			return
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cleanupCancel()
-		if e := r.Rollback(cleanupCtx); e != nil {
-			t.Errorf("cancelled returned owner cleanup: %v", e)
-		}
-	})
+	registerReturnedFixtureCleanup(t.Cleanup, func(e error) { t.Errorf("cancelled returned owner cleanup: %v", e) }, r)
+
 	if !errors.Is(e, context.Canceled) || r == nil || r.Process == nil || r.Process != actualChild || starts != 1 {
 		t.Fatalf("post-spawn cancellation failed adoption: starts=%d exact-owner=%t err=%v", starts, r != nil && r.Process == actualChild, e)
 	}

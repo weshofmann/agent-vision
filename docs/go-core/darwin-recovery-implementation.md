@@ -3,7 +3,7 @@
 Authority: [operator approval and assignment](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5858626978)
 at design head `79c30fd8dc2bd13036b1eef96903c03254b22808`.
 This implements RD-D1 through RD-D5 of the [approved design](darwin-master-open-recovery-design.md).
-**Current boundary:** correction cycle 1 under [independent triage](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859041800).
+**Current boundary:** final correction cycle 2 under [independent re-review](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859242445).
 The original comparison and partial qualification results below are preserved;
 amended native fixtures and resumed qualification remain held for re-review.
 T10-R1 remains open. All PRs remain Draft/unmerged; local C++ stays the default,
@@ -230,3 +230,25 @@ explicitly disabled. Inspect `started.json`, `result.json`, `output.txt`,
 qualification complete. If an outer supervisor interrupts finalization, retain
 all available WORK/output and classify that evidence as incomplete; never invent
 hashes or cleanup completion. Any new unexpected native failure returns to review.
+
+## Correction cycle 2: independent native-child fixture cleanup
+
+The cycle-1 independent review closed DRI-R1 and DRI-R3 at the source boundary,
+but held DRI-R2 because the cancellation fixture depended on Spawn returning the
+correct child owner before cleanup was reachable. The native start seam now
+registers the actual returned cleanup before forwarding its result to Spawn.
+That saved cleanup remains reachable when Resources is nil or its Process is
+missing or mismatched. Returned Resources also retain their own rollback cleanup.
+Each callback uses the existing sole reaper under a two-second context and reports
+errors. The exact-owner, one-start, cancellation, status and FD assertions remain
+unchanged; no production recovery or dependency code changes.
+
+The same registration helpers have a no-native injected regression for all three
+ownership faults. The prior returned-owner-only arrangement failed each case with
+zero known-child cleanup calls; the correction passes, joins the synthetic sole
+reapers and preserves both cleanup errors. Evidence and actual executed injected
+binaries are retained in the ignored implementation ledger's `cycle-2/` directory.
+Amended native execution remains held for independent pre-native re-review. This
+uses the final authorized correction allowance; unresolved findings return to the
+operator. The original comparison and nested observations retain their original
+SHA and binary-identity limits; they are not repeated or relabeled as cycle-2 runs.
