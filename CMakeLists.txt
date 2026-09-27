@@ -61,6 +61,19 @@ target_link_libraries(agentvision-core-client PUBLIC Threads::Threads)
 include(CTest)
 agentvision_configure_core()
 if(BUILD_TESTING)
+    if(AGENTVISION_BUILD_CORE)
+        add_executable(ipc_terminal_test tests/ipc_terminal.cpp)
+        target_link_libraries(ipc_terminal_test PRIVATE agentvision-ipc-session)
+        target_compile_options(ipc_terminal_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(ipc_terminal_test PRIVATE
+            REAL_CORE="${CMAKE_CURRENT_BINARY_DIR}/agentvision-core"
+            SESSION_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_fixture.py")
+        add_dependencies(ipc_terminal_test agentvision-core-build)
+        add_test(NAME ipc_terminal COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_pty.py" $<TARGET_FILE:ipc_terminal_test>
+            --output "${CMAKE_CURRENT_BINARY_DIR}/ipc-terminal-evidence")
+        set_tests_properties(ipc_terminal PROPERTIES TIMEOUT 190)
+    endif()
     add_executable(core_protocol_test tests/core_protocol.cpp)
     target_link_libraries(core_protocol_test PRIVATE agentvision-core-client)
     target_compile_options(core_protocol_test PRIVATE -Wall -Wextra -Wpedantic)
