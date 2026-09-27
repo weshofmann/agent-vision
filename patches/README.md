@@ -119,3 +119,13 @@ Credit-completion snapshot, without shipping instrumentation or a public API.
 Its link map verifies single extraction. Producer barriers wait for actual
 consumption/publication and completed Credit before exit; arbitrary wire frames
 coalesce only in queued owned chunks, never in a borrowed span.
+
+
+Task10 round1 native qualification also registers `ipc_terminal_negative`:
+premature core loss and omitted loss-frame publication must fail the native
+application while the outer fixture proves cooked-input/termios restoration.
+Both native tests reuse the existing pyte desktop-fixture dependency in
+`.probe/tools`; CMake sets its PYTHONPATH. Run the focused pair with
+`GODEBUG=execwait=2 GOGC=1 "$CTEST" --test-dir .probe/task10-on -R '^ipc_terminal(_negative)?$' --output-on-failure`.
+Original full-Go native-start failure remains an open gate; copied diagnostics
+are separately labeled and do not replace shipping qualification.

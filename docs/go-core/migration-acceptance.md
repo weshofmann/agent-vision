@@ -242,3 +242,15 @@ counts and failed attempts remain ignored durable evidence. DefaultOFF36/36
 passing evidence is retained with all613 actual default compiler inputs verified
 byte-identical; only opt-in native test registration/oracles changed. Task10 remains
 open pending scoped re-review and explicit disposition of T10-R1.
+
+
+Round1 code checkpoint `851cf2537ecde79934079c7888bf86cf988afea5` is byte-identical
+to the compiled native source/fixtures (later acceptance text only differs).
+A single subsequently authorized deeper copied pinned-PTY diagnostic used a local
+modfile/replace and error-only Open/ioctl labels. Its full-module race run passed,
+including all sixteen starts, so it did not identify the failing inner operation.
+The original shipping failure and reproduced `pty.Open` phase remain unresolved;
+this passing diagnostic is neither a cause nor a shipping-Go qualification pass.
+No additional Go execution or retained Go/dependency change followed. Existing
+pyte desktop-test dependency is reused for decoded native captions; CMake supplies
+the same `.probe/tools` PYTHONPATH for the opt-in native tests.
