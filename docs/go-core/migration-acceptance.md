@@ -83,7 +83,10 @@ warm-ups); each repeat returned to FD baseline 4 and goroutine baseline 2.
 The inherited upstream libvterm CMake deprecation warning remains. These
 results are attributed to `08c70cb` only; the later test/doc correction has
 its own focused verification and must not be described as a fresh whole rerun.
-All evidence remains under private ignored qualification storage.
+The original whole-run source, executed-binary copies, command, log and result
+remain in private ignored qualification storage. The later focused CTest replaced
+its fixed-path raw package and desktop captures; the new raw captures were
+separately archived and read back. The original raw folders are not recoverable.
 
 Independent [Task 12 review](https://github.com/weshofmann/agent-vision/pull/11#issuecomment-5860276971)
 found T12-R1: a repeated package case could accept an old successful peer audit
@@ -92,7 +95,8 @@ reproduced this false pass. The test now unlinks the case audit before launch an
 requires the current peer to create a valid Hello/reply-sent record; the real
 installed package matrix remains a separate covering check. T12-R2 qualifies the
 stopped-core observation and the separate source-backed ordering claim above.
-Scoped re-review of this correction and independent whole-PR review are pending.
+Scoped independent re-review closed T12-R1/R2 and identified a minor evidence
+wording correction, addressed above. Independent whole-PR review is pending.
 Operator acceptance remains separate. All manual checks below remain
 unchecked; automated checks do not qualify native UX or authorize Task 13.
 
