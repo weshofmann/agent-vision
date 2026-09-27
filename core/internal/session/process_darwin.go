@@ -16,56 +16,106 @@ import (
 	"github.com/weshofmann/agent-vision/core/internal/protocol"
 )
 
-type DarwinSpawner struct{}
+// Each spawn owns its injected boundary operations; production has no mutable hooks.
+type DarwinSpawner struct{ ops *darwinSpawnOps }
+type darwinSpawnOps struct {
+	master   masterOpenOps
+	slave    func(*os.File) (*os.File, error)
+	termios  func(*os.File) error
+	size     func(*os.File, uint16, uint16) error
+	nonblock func(int) error
+	start    func(SpawnConfig, *os.File) (Process, func(context.Context) error, error)
+	close    func(*os.File) error
+}
 
-func (DarwinSpawner) Spawn(ctx context.Context, c SpawnConfig) (r *Resources, err error) {
+func nativeDarwinSpawnOps() darwinSpawnOps {
+	return darwinSpawnOps{
+		master: nativeMasterOpenOps(), slave: pty.OpenSlaveFromMaster, termios: configureV0Termios,
+		size:     func(m *os.File, rows, cols uint16) error { return pty.Setsize(m, &pty.Winsize{Rows: rows, Cols: cols}) },
+		nonblock: func(fd int) error { return syscall.SetNonblock(fd, true) }, start: startDarwinChild,
+	}
+}
+func startDarwinChild(c SpawnConfig, s *os.File) (Process, func(context.Context) error, error) {
+	shell, env := shellEnvironment(c)
+	child, e := os.StartProcess(shell, []string{shell}, &os.ProcAttr{Dir: c.Cwd, Env: env, Files: []*os.File{s, s, s}, Sys: &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}})
+	if child == nil {
+		return nil, nil, e
+	}
+	// Capture and adopt a returned child before interpreting the accompanying error.
+	pid := child.Pid
+	if pid <= 0 {
+		return nil, func(context.Context) error { return child.Release() }, errors.Join(e, errors.New("invalid started process identity"))
+	}
+	p := newOwnedProcess(pid, processOps{wait: func(pid int, status *syscall.WaitStatus) (int, error) {
+		return syscall.Wait4(pid, status, syscall.WNOHANG, nil)
+	}, signal: syscall.Kill, release: child.Release})
+	return p, p.cleanup, e
+}
+func (d DarwinSpawner) Spawn(ctx context.Context, c SpawnConfig) (r *Resources, err error) {
 	if e := ctx.Err(); e != nil {
 		return nil, e
 	}
 	if c.Rows == 0 || c.Cols == 0 || c.Rows > 4096 || c.Cols > 4096 {
 		return nil, errors.New("invalid terminal size")
 	}
-	m, s, e := pty.Open()
-	if e != nil {
+	ops := nativeDarwinSpawnOps()
+	if d.ops != nil {
+		ops = *d.ops
+	}
+	m, report, e := acquireDarwinMaster(ctx, ops.master)
+	if m == nil {
 		return nil, e
 	}
-	r = &Resources{Master: m, Slave: s, MasterFD: int(m.Fd())}
+	r = &Resources{Master: m, MasterFD: int(m.Fd()), close: ops.close, MasterOpen: report}
 	defer func() {
 		if err != nil && r.Process == nil {
-			err = errors.Join(err, r.Rollback(context.Background()))
-			r = nil
+			cleanupErr := r.Rollback(context.Background())
+			err = errors.Join(err, cleanupErr)
+			if cleanupErr == nil {
+				r = nil
+			}
 		}
 	}()
-	syscall.CloseOnExec(r.MasterFD)
-	if err = configureV0Termios(s); err != nil {
-		return r, err
-	}
-	if err = pty.Setsize(m, &pty.Winsize{Rows: c.Rows, Cols: c.Cols}); err != nil {
-		return r, err
-	}
-	if err = syscall.SetNonblock(r.MasterFD, true); err != nil {
-		return r, err
-	}
-	if err = ctx.Err(); err != nil {
-		return r, err
-	}
-	shell, env := shellEnvironment(c)
-	child, e := os.StartProcess(shell, []string{shell}, &os.ProcAttr{Dir: c.Cwd, Env: env, Files: []*os.File{s, s, s}, Sys: &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}})
 	if e != nil {
 		return r, e
 	}
-	// Capture identity before Release ever runs. Only this owner waits/signals it.
-	pid := child.Pid
-	if pid <= 0 {
-		return r, errors.New("invalid started process identity")
+	if e = ctx.Err(); e != nil {
+		return r, e
 	}
-	p := newOwnedProcess(pid, processOps{wait: func(pid int, status *syscall.WaitStatus) (int, error) {
-		return syscall.Wait4(pid, status, syscall.WNOHANG, nil)
-	}, signal: syscall.Kill, release: child.Release})
-	r.Process = p
-	r.rollback = p.cleanup
-	// Keep the closed pointer for idempotence; do not retain a parent slave FD.
-	if e = s.Close(); e != nil {
+	s, e := ops.slave(m)
+	r.Slave = s
+	if e != nil {
+		return r, e
+	}
+	if e = ctx.Err(); e != nil {
+		return r, e
+	}
+	if s == nil {
+		return r, errors.New("slave open returned no resource")
+	}
+	for _, configure := range []func() error{
+		func() error { return ops.termios(s) }, func() error { return ops.size(m, c.Rows, c.Cols) }, func() error { return ops.nonblock(r.MasterFD) },
+	} {
+		if e = ctx.Err(); e != nil {
+			return r, e
+		}
+		if e = configure(); e != nil {
+			return r, e
+		}
+	}
+	if e = ctx.Err(); e != nil {
+		return r, e
+	}
+	child, cleanup, e := ops.start(c, s)
+	r.Process = child
+	r.rollback = cleanup
+	if e != nil {
+		return r, e
+	}
+	if child == nil {
+		return r, errors.New("start returned no child")
+	}
+	if e = r.CloseParentSlave(); e != nil {
 		return r, e
 	}
 	if e = ctx.Err(); e != nil {

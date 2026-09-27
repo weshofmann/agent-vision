@@ -21,7 +21,7 @@ The opt-in independent Go core additionally uses:
 
 | Component | Qualified revision | Retained notice |
 | --- | --- | --- |
-| creack/pty | `v1.1.24` (checksums in `core/go.sum`) | `third_party/notices/creack-pty.LICENSE` (MIT, Keith Rarick) |
+| creack/pty | `v1.1.24`, `edfbf75025b0ba4ee17c19f52d9b600fad80a787` (explicit local source plus Darwin patch) | `third_party/notices/creack-pty.LICENSE` (MIT, Keith Rarick) |
 | Go runtime/standard library | `go1.27.0`, Darwin arm64 | `third_party/notices/Go.LICENSE`, `Go.PATENTS` (Go Authors) |
 
 The Go standard-library dependency closure includes its vendored
@@ -29,3 +29,13 @@ The Go standard-library dependency closure includes its vendored
 LICENSE and PATENTS are byte-identical to the retained Go notices. The core has
 no additional module dependencies. CMake copies these complete notices only for
 the opt-in build; it does not imply redistribution clearance for AgentVision.
+
+The complete creack/pty module source is retained under
+`core/third_party/creack-pty`, with the MIT notice unchanged. The pristine archive
+identity and every upstream file digest are in `creack-pty.pristine.json`; the
+reviewed changed-file digests and patch digest are in `creack-pty.downstream.json`.
+The [upstream-relative patch](patches/creack-pty-darwin-master-boundary.patch)
+adds only the Darwin borrowed-master boundary and its deterministic phase tests.
+`cmake/verify_creack_source.py` checks the complete effective file set and both
+reverse/forward patch identities before builds. The local module replacement is
+not authenticated by `go.sum`; no build-time replacement download is used.

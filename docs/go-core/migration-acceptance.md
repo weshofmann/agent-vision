@@ -3,8 +3,8 @@
 ## PR2 scope and gate
 
 Status: Tasks 7–9 have passed their independent task gates. Task 10 implementation
-and native presentation qualification are submitted for review; its complete Go
-qualification remains unresolved. Task 10 began at
+and completed native qualification are submitted for final independent review;
+T10-R1 disposition and operator acceptance remain unresolved. Task 10 began at
 `875fb1277fc53849d078921d819ca48f34b98e4c`. The [Task 9 gate closure](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5851235133)
 authorizes this bounded harness milestone.
 Base main: `3bc0b00d691739f3b472f3e0509f2db4c0ecf850`, the merged PR1.
@@ -152,6 +152,14 @@ GODEBUG=execwait=2 GOGC=1 "$CTEST" --test-dir .probe/task10-on --output-on-failu
 
 The native core is an ordinary CGO-disabled `-trimpath -buildvcs=false` build;
 `core_go` separately runs the whole Go module with `-race` and CGO enabled.
+It now uses `tests/retained_go_test.py` to run the actual qualified Go child with
+`-work -count=1` and a fresh durable ignored GOTMPDIR under
+`.probe/go-test-evidence/`. WORK, executed test binaries/hashes, exact command,
+selected environment, source/replacement archive/digests and outputs survive
+success and failure. Go120s/CTest150s caps and the default desktop are unchanged.
+This future retention does not repair historical ordinary-Go-test binary gaps.
+For direct whole-module qualification and current held correction gates, follow
+[the Darwin recovery retention recipe](darwin-recovery-implementation.md#correction-cycle-1-fixture-ownership-causal-cancellation-and-retention).
 Execwait/GC settings are qualification settings, not ordinary CTest defaults.
 The pinned libvterm configure compatibility deprecation remains explicitly
 retained; warning-free compilation is a separate claim.
@@ -429,3 +437,25 @@ question remains pending; no lazy-initialization explanation is assumed.
 The default local C++ desktop and lifecycle coverage remain intact. Task 13
 removal, manual equivalence acceptance and PR acceptance are not authorized by
 these observations.
+
+### Current recovery qualification and final review boundary
+
+After [independent correction-cycle clearance](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5859335377),
+code `40ab6e62685e5aac4f5c08c618ae00b7aea1ff40` passed one retained whole-module
+Go race invocation (25.292 s), fresh default-OFF 42/42 CTests (54.385 s), and fresh
+opt-in-ON clean-first build plus 48/48 CTests (116.713 s). Three additional fresh
+normal/normal/direct-core-loss workloads passed: 51 creations, 48 heavy A cycles,
+48 zeroed Credit completions, 195 resource records and 51 joined worker records.
+The automated restoration/cooked-input oracles passed; manual acceptance is not
+claimed. Quiet core thread plateaus varied across fresh processes (15/15/17),
+with quiet frontend/core FDs 14/11 and direct children 1/1 while B remained alive.
+These finite observations establish no universal thread bound or growth cause.
+
+[Detailed results, resource stages and evidence limits](darwin-recovery-implementation.md#completed-qualification-at-40ab6e6-final-review-pending)
+retain the original failed whole-module run, original comparison/nested SHA
+attribution and missing historical executed-binary identities. Later documentation
+changes preserve the qualified source bytes. Final independent Astra/high review
+covers the complete recovery and PR #9 client interactions before operator
+disposition; **T10-R1 remains open** and PR2 acceptance/Tasks 11–12 cutover stay
+gated. Local C++ remains default, PR #10 unchanged, PR #11 frozen, all PRs
+Draft/unmerged. No further runtime or code correction is authorized here.

@@ -189,10 +189,14 @@ func TestNativeSixteenStartsEndpointBaselines(t *testing.T) {
 	beforeFD, beforeWorkers := nativeFDCount(), runtime.NumGoroutine()
 	resources := make(chan *session.Resources, 16)
 	spawnErrors := make(chan error, 16)
+	observedResources := make(chan *session.Resources, 16)
 	c, m, done := startConnection(t, policy.Default(), spawnFunc(func(ctx context.Context, c session.SpawnConfig) (*session.Resources, error) {
 		c.Shell = "/bin/sh"
 		c.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "ENV=/dev/null", "PS1="}
 		r, e := (session.DarwinSpawner{}).Spawn(ctx, c)
+		if r != nil {
+			observedResources <- r
+		}
 		if e != nil {
 			spawnErrors <- e
 			return r, e
@@ -201,6 +205,33 @@ func TestNativeSixteenStartsEndpointBaselines(t *testing.T) {
 		<-ctx.Done()
 		return r, ctx.Err()
 	}))
+	// Failure also closes the endpoint and joins the existing cleanup owner.
+	// This test-only accounting does not weaken start/baseline assertions.
+	joined := false
+	defer func() {
+		_ = c.Close()
+		if !joined {
+			select {
+			case e := <-done:
+				if e != nil {
+					t.Errorf("failure-path owned cleanup: %v", e)
+				}
+			case <-time.After(policy.Default().CleanupTimeout):
+				t.Error("failure-path owned cleanup incomplete; further native work blocked")
+			}
+		}
+		for len(observedResources) > 0 {
+			r := <-observedResources
+			var masterErr, slaveErr error
+			if r.Master != nil {
+				_, masterErr = r.Master.Stat()
+			}
+			if r.Slave != nil {
+				_, slaveErr = r.Slave.Stat()
+			}
+			t.Logf("returned owner report=%+v masterStat=%v slaveStat=%v childOwned=%t", r.MasterOpen, masterErr, slaveErr, r.Process != nil)
+		}
+	}()
 	hello(t, c)
 	for i := 2; i <= 17; i++ {
 		send(t, c, protocol.CreateSession{Rows: 24, Cols: 80, ReceiveWindow: 262144}, protocol.RequestID(i), 0)
@@ -217,8 +248,10 @@ func TestNativeSixteenStartsEndpointBaselines(t *testing.T) {
 		}
 	}
 	c.Close()
-	if e := <-done; e != nil {
-		t.Fatal(e)
+	cleanupErr := <-done
+	joined = true
+	if cleanupErr != nil {
+		t.Fatal(cleanupErr)
 	}
 	select {
 	case <-m.Done():
