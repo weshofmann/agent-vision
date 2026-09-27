@@ -1,6 +1,7 @@
 // Real libvterm DSR/CPR -> tagged Writer -> adapter -> literal Python wire peer.
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -184,6 +185,77 @@ static void mechanismRegression() {
           "merged event emits actual DSR while old exact-chunk readiness is false");
     std::puts("PASS: merged ready+DSR emits real ESC[0n; old exact-five-byte gate false");
 }
+// The same predicates are used by the live fixture and the constructed matrix.
+static bool positiveCleanup(const ConnectionCompletion &c) {
+    return c.contactError == ContactError::None && c.graceful &&
+           c.core.kind == CoreCompletion::Kind::Exited && c.core.value == 0 &&
+           c.core.systemError == 0 && !c.core.termSent && !c.core.killSent;
+}
+static bool eofCleanup(const ConnectionCompletion &c) {
+    return c.contactError == ContactError::EOFReached && !c.graceful &&
+           c.core.systemError == 0 && !c.core.killSent &&
+           ((c.core.kind == CoreCompletion::Kind::Exited && c.core.value == 0) ||
+            (c.core.kind == CoreCompletion::Kind::Signaled && c.core.value == SIGTERM &&
+             c.core.termSent));
+}
+static void completionMatrix() {
+    using Kind = CoreCompletion::Kind;
+    using Contact = ContactError;
+    struct Case {
+        const char *name;
+        Kind kind;
+        int value, error;
+        bool term, kill;
+        Contact contact;
+        bool graceful, positive, eof;
+    };
+    const Case cases[] = {
+        {"positive exit0", Kind::Exited, 0, 0, false, false, Contact::None, true, true, false},
+        {"EOF exit0", Kind::Exited, 0, 0, false, false, Contact::EOFReached, false, false, true},
+        {"EOF exit0 TERM race", Kind::Exited, 0, 0, true, false, Contact::EOFReached, false, false, true},
+        {"EOF owned TERM", Kind::Signaled, SIGTERM, 0, true, false, Contact::EOFReached, false, false, true},
+        {"EOF assertion exit1", Kind::Exited, 1, 0, false, false, Contact::EOFReached, false, false, false},
+        {"EOF negative exit", Kind::Exited, -1, 0, true, false, Contact::EOFReached, false, false, false},
+        {"EOF unowned TERM", Kind::Signaled, SIGTERM, 0, false, false, Contact::EOFReached, false, false, false},
+        {"EOF unexpected signal", Kind::Signaled, SIGINT, 0, true, false, Contact::EOFReached, false, false, false},
+        {"EOF SIGKILL", Kind::Signaled, SIGKILL, 0, true, true, Contact::EOFReached, false, false, false},
+        {"EOF exit0 KILL recorded", Kind::Exited, 0, 0, false, true, Contact::EOFReached, false, false, false},
+        {"EOF TERM KILL recorded", Kind::Signaled, SIGTERM, 0, true, true, Contact::EOFReached, false, false, false},
+        {"EOF ownership uncertain", Kind::OwnershipUncertain, 0, 0, false, false, Contact::EOFReached, false, false, false},
+        {"EOF cleanup uncertain", Kind::CleanupUncertain, 0, 0, false, false, Contact::EOFReached, false, false, false},
+        {"EOF exit0 system error", Kind::Exited, 0, 5, false, false, Contact::EOFReached, false, false, false},
+        {"EOF TERM system error", Kind::Signaled, SIGTERM, 5, true, false, Contact::EOFReached, false, false, false},
+        {"EOF graceful invalid", Kind::Exited, 0, 0, false, false, Contact::EOFReached, true, false, false},
+        {"loss without contact", Kind::Exited, 0, 0, false, false, Contact::None, false, false, false},
+        {"wrong contact Protocol", Kind::Exited, 0, 0, false, false, Contact::Protocol, false, false, false},
+        {"wrong contact IO", Kind::Signaled, SIGTERM, 0, true, false, Contact::IO, false, false, false},
+        {"wrong contact Cancelled", Kind::Exited, 0, 0, true, false, Contact::Cancelled, false, false, false},
+        {"positive TERM attempted", Kind::Exited, 0, 0, true, false, Contact::None, true, false, false},
+        {"positive KILL attempted", Kind::Exited, 0, 0, false, true, Contact::None, true, false, false},
+        {"positive nonzero exit", Kind::Exited, 1, 0, false, false, Contact::None, true, false, false},
+        {"positive system error", Kind::Exited, 0, 5, false, false, Contact::None, true, false, false},
+        {"positive signaled TERM", Kind::Signaled, SIGTERM, 0, true, false, Contact::None, true, false, false},
+        {"positive ownership uncertain", Kind::OwnershipUncertain, 0, 0, false, false, Contact::None, true, false, false},
+        {"positive cleanup uncertain", Kind::CleanupUncertain, 0, 0, false, false, Contact::None, true, false, false},
+    };
+    for (const auto &row : cases) {
+        ConnectionCompletion c;
+        c.core.kind = row.kind; c.core.value = row.value; c.core.systemError = row.error;
+        c.core.termSent = row.term; c.core.killSent = row.kill;
+        c.contactError = row.contact; c.graceful = row.graceful;
+        const bool positive = positiveCleanup(c), eof = eofCleanup(c);
+        std::printf("MATRIX: %s positive=%d EOF=%d expected=%d/%d\n", row.name,
+                    positive, eof, row.positive, row.eof);
+        check(positive == row.positive && eof == row.eof, row.name);
+    }
+    std::printf("PASS: %zu completion rows use live strict-positive/EOF predicates\n",
+                sizeof(cases) / sizeof(cases[0]));
+}
+static void printBytes(const char *name, const std::string &bytes) {
+    std::printf("BYTES: %s size=%zu hex=", name, bytes.size());
+    for (unsigned char b : bytes) std::printf("%02x", b);
+    std::puts("");
+}
 static void run(const std::string &schedule) {
     const int baseDescriptors = descriptors();
     setenv("AV_CONNECTION_CASE", "dsr-reserve", 1);
@@ -241,24 +313,44 @@ static void run(const std::string &schedule) {
         check(controller->clientIsDisconnected(), "disconnect deadline");
     }
     controller->finishPresentation();
-    check(!controller->readerThread.joinable() && !controller->writerThread.joinable(),
-          "both owned presentation workers joined");
-    check(controller->lockState([](auto &s) { return s.surface.size == TPoint{80, 24}; }),
-          "render state accessible after reply overflow/loss");
+    const bool readerJoined = !controller->readerThread.joinable();
+    const bool writerJoined = !controller->writerThread.joinable();
+    const bool stateAccessible = controller->lockState(
+        [](auto &s) { return s.surface.size == TPoint{80, 24}; });
     controller->shutDown();
     owner.controller = nullptr;
     c->shutdown();
     auto completion = c->join();
     ep.reset();
     c.reset();
-    check(descriptors() == baseDescriptors, "descriptor baseline restored");
-    check(completion.core.kind == CoreCompletion::Kind::Exited && completion.core.value == 0 &&
-              !completion.core.termSent && !completion.core.killSent,
-          "fake peer assertions and direct-child cleanup exit0 without escalation");
-    std::printf("PHASE: schedule=%s callbacks=%d consumed=%zu lost=%d replies=%zu filled=%d "
-                "early=%d contact=%d graceful=%d; workers joined; descriptors baseline; peer exit0\n",
-                schedule.c_str(), gate.reads, gate.consumed, gate.losses, gate.replies.size(),
-                gate.filled, early, int(completion.contactError), completion.graceful);
+    const int finalDescriptors = descriptors();
+    // Emit measured completion and semantic observations BEFORE asserting on them.
+    std::printf("COMPLETION: schedule=%s kind=%d value=%d systemError=%d termSent=%d "
+                "killSent=%d contactError=%d graceful=%d FD=%d/%d readerJoined=%d "
+                "writerJoined=%d stateAccessible=%d\n", schedule.c_str(),
+                int(completion.core.kind), completion.core.value, completion.core.systemError,
+                completion.core.termSent, completion.core.killSent, int(completion.contactError),
+                completion.graceful, finalDescriptors, baseDescriptors, readerJoined,
+                writerJoined, stateAccessible);
+    std::printf("PHASE: callbacks=%d consumed=%zu lost=%d replies=%zu ready=%d "
+                "release=%d filled=%d early=%d timedOut=%d\n", gate.reads, gate.consumed,
+                gate.losses, gate.replies.size(), gate.ready, gate.release, gate.filled,
+                early, gate.timedOut);
+    printBytes("query/readiness", gate.bytes);
+    printBytes("emulator-generated", gate.generated);
+    for (size_t i = 0; i < gate.replies.size(); ++i) {
+        const auto &reply = gate.replies[i];
+        std::printf("ADMISSION: index=%zu bytes=%zu result=%d allFillerR=%d\n", i,
+                    reply.bytes.size(), int(reply.result),
+                    reply.bytes == std::string(4086, 'r'));
+        if (reply.bytes.size() <= 10) printBytes("reply", reply.bytes);
+    }
+    std::fflush(stdout);
+    check(readerJoined && writerJoined, "both owned presentation workers joined");
+    check(stateAccessible, "render state accessible after reply overflow/loss");
+    check(finalDescriptors == baseDescriptors, "descriptor baseline restored");
+    check(schedule == "loss" ? eofCleanup(completion) : positiveCleanup(completion),
+          "schedule-specific verified child/contact cleanup");
     const bool overflow = !early && !gate.timedOut && gate.filled &&
         gate.bytes == "\033[5n\033[6nready\033[5n" && gate.consumed == 17 &&
         gate.replies.size() == 3 && gate.replies[1].bytes == std::string(4086, 'r') &&
@@ -266,7 +358,7 @@ static void run(const std::string &schedule) {
         gate.replies[2].bytes == "\033[0n" &&
         gate.replies[2].result == tvterm::EnqueueResult::Overflow &&
         gate.generated == "\033[0n\033[1;1R\033[0n" && gate.losses == 0 &&
-        completion.contactError == ContactError::None && completion.graceful;
+        positiveCleanup(completion);
     if (schedule == "early") {
         check(early && gate.generated == "\033[0n\033[1;1R\033[0n" &&
                   !overflow && completion.graceful &&
@@ -274,9 +366,14 @@ static void run(const std::string &schedule) {
               "early query negative must reject phase ordering with graceful cleanup");
         std::puts("PASS negative: real second DSR generated before filling cannot satisfy overflow oracle");
     } else if (schedule == "loss") {
-        check(!overflow && gate.bytes == "\033[5n\033[6nready" && gate.losses == 1 &&
-                  gate.replies.size() == 2 && !completion.graceful &&
-                  completion.contactError == ContactError::EOFReached,
+        check(!overflow && !early && !gate.timedOut && gate.ready && gate.release &&
+                  gate.filled && gate.bytes == "\033[5n\033[6nready" &&
+                  gate.consumed == 13 && gate.losses == 1 &&
+                  gate.generated == "\033[0n\033[1;1R" && gate.replies.size() == 2 &&
+                  gate.replies[0].bytes == "\033[0n\033[1;1R" &&
+                  gate.replies[0].result == tvterm::EnqueueResult::Queued &&
+                  gate.replies[1].bytes == std::string(4086, 'r') &&
+                  gate.replies[1].result == tvterm::EnqueueResult::Queued && eofCleanup(completion),
               "unrelated EOF must not satisfy reserve-overflow oracle");
         std::puts("PASS negative: unrelated EOF rejected, no second real reply/overflow");
     } else {
@@ -291,9 +388,11 @@ int main(int argc, char **argv) {
     try {
         std::string schedule = argc == 2 ? argv[1] : "normal";
         check(argc <= 2 && (schedule == "normal" || schedule == "fragmented" ||
-              schedule == "early" || schedule == "loss" || schedule == "mechanism"),
+              schedule == "early" || schedule == "loss" || schedule == "mechanism" ||
+              schedule == "matrix"),
               "known fixture schedule");
-        if (schedule == "mechanism") mechanismRegression();
+        if (schedule == "matrix") completionMatrix();
+        else if (schedule == "mechanism") mechanismRegression();
         else run(schedule);
     } catch (const std::exception &e) {
         std::fprintf(stderr, "FAIL: %s\n", e.what());

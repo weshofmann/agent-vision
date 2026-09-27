@@ -319,3 +319,33 @@ cycle: **no correction, retry, second focused batch or complete OFF qualificatio
 was performed. The existing failed OFF and single-event archives remain unchanged.
 WPR-F1 and T10-R1 both remain open; this checkpoint claims neither fixture closure
 nor Task10/PR2 acceptance. No Go core or native-start test was executed.
+
+### WPR-F1-R1 authorized EOF cleanup predicate correction
+
+The [supervisor's WPR-F1-R1 authorization](https://github.com/weshofmann/agent-vision/pull/9#issuecomment-5852401363)
+confirmed the unconditional positive-cleanup assertion was incompatible with the
+cooperative EOF negative. The corrected fixture uses distinct predicates: positive,
+fragmented and early schedules require graceful exit0, contactNone, systemError0
+and no TERM/KILL; EOF requires nongraceful EOFReached, systemError0, no KILL and
+either reaped exit0 (with or without a recorded TERM attempt) or SIGTERM with an
+owner-recorded TERM. Other signals, nonzero exits, uncertain completion, wrong
+contact and system errors are rejected. A 27-row matrix exercises these same
+live predicates; no process or production hook was introduced.
+
+Completion, phase bytes/admissions, worker joins, state accessibility and measured
+FD baseline/result are now printed before the post-join assertions. The EOF
+negative independently requires exact query/readiness and consumed13, the actual
+10-byte queued reply plus 4,086 queued filler bytes, genuine Lost, no timeout or
+early query and no subsequent query/reply/Overflow. Positive reserve enforcement
+and the causal Credit13 barrier are unchanged; the fake peer is unchanged.
+
+One predeclared reserve/matrix batch passed **6/6, 1.95s**; the separate affected
+shared-peer batch passed **20/20, 22.01s**. In this new measured EOF run, completion
+was Signaled/SIGTERM15, systemError0, termSent1, killSent0, EOFReached/nongraceful;
+workers joined, retained state was accessible and descriptors restored5/5. Normal,
+fragmented and early schedules retained strict exit0/noTERM/noKILL/contactNone/
+graceful completion and descriptors5/5. These new fields do not recover or identify
+the missing completion fields from the prior failed run. No retry was performed.
+The single fresh complete OFF qualification follows this committed checkpoint;
+its result and independent scoped review remain pending. T10-R1 remains open;
+no Go/ON/native-start test or PR2 acceptance is claimed.
