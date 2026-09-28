@@ -41,6 +41,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.py"
     "${tvterm_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-lifecycle.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-transport.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-paste.patch"
     COMMAND_ERROR_IS_FATAL ANY)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
 foreach(notice IN ITEMS tvterm.COPYRIGHT tvision.COPYRIGHT libvterm.LICENSE)

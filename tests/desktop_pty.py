@@ -128,7 +128,11 @@ class Desktop:
     def send(self, text):
         os.write(self.master, text.encode())
         self.drain(.08)
-    def command(self, text): self.send(text+'\r')
+    def command(self, text):
+        # Send typed text and the explicit Return separately. Turbo Vision may
+        # classify a burst of several text events, including Return, as paste.
+        self.send(text)
+        self.send('\r')
     def menu(self, key):
         self.send('\x02')
         self.wait(lambda: self.contains('Close Term'), 'Ctrl-B menu did not open')
@@ -769,18 +773,24 @@ def dynamic_unrelated_close_modal(binary, folder):
     try:
         d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
                'synthetic initial pair missing')
+        b_left, _, _, b_bottom = d.bounds('B')
         d.menu('w')
         d.wait(lambda: d.contains('Terminate live terminal B'), 'B close confirmation missing')
         d.confirm(True)
         d.wait(lambda: d.contains('Terminal B [closing]'), 'B Close was not held')
         d.menu('\t')
+        _, _, _, a_bottom = d.bounds('A')
+        assert b_bottom - 1 >= a_bottom, 'B corner is not below A frame'
         d.menu('w')
         d.wait(lambda: d.contains('Terminate live terminal A'), 'A modal did not open')
+        def b_corner(): return d.screen.display[b_bottom - 1][b_left]
+        assert b_corner() == '└', 'B corner is not exposed beneath A modal'
         control.write_text('closed')
         for _ in range(12): d.send('x')
         d.wait(lambda: json.loads(audit.read_text())['released_close_count'] == 1,
                'B Closed was not released')
-        assert d.contains('Terminate live terminal A'), 'B Closed disturbed A confirmation'
+        d.wait(lambda: b_corner() == '░' and d.contains('Terminate live terminal A'),
+               'B corner did not clear safely beneath A confirmation')
         d.confirm(False)
         d.wait(lambda: not d.contains('Terminal B ['), 'B did not retire after A modal')
         assert d.contains('Terminal A [live]'), 'A was lost after canceling confirmation'
