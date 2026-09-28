@@ -54,6 +54,8 @@ try:
         if control.exists():
             action = control.read_text().strip()
             control.unlink()
+            if action not in ('lose', 'created', 'error', 'closed'):
+                raise AssertionError(f'unexpected control action {action!r}')
             if action == 'lose': break
             if action in ('created', 'error'):
                 assert held_creates
