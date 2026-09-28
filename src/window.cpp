@@ -4,7 +4,9 @@
 #define Uses_TEvent
 #define Uses_MsgBox
 #define Uses_TFrame
+#define Uses_TText
 #include <tvision/tv.h>
+#include <algorithm>
 using namespace agentvision;
 
 const tvterm::TVTermConstants TerminalWindow::appConsts = {
@@ -15,8 +17,41 @@ TerminalWindow::TerminalWindow(const TRect &bounds, tvterm::TerminalController &
                                std::shared_ptr<SessionEndpoint> session, std::string name) noexcept :
     TWindowInit(&tvterm::BasicTerminalWindow::initFrame),
     BasicTerminalWindow(bounds, term, appConsts), controller(term),
-    endpoint(std::move(session)), label(std::move(name))
+    endpoint(std::move(session)), label(std::move(name)), displayTitle("Terminal " + label)
 {}
+bool TerminalWindow::validDisplayTitle(const std::string &text) noexcept
+{
+    if (text.size() > 48) return false;
+    for (size_t i = 0; i < text.size();) {
+        const auto lead = static_cast<unsigned char>(text[i]);
+        uint32_t cp = 0;
+        size_t count = 0;
+        if (lead < 0x80) { cp = lead; count = 1; }
+        else if (lead >= 0xC2 && lead <= 0xDF) { cp = lead & 0x1F; count = 2; }
+        else if (lead >= 0xE0 && lead <= 0xEF) { cp = lead & 0x0F; count = 3; }
+        else if (lead >= 0xF0 && lead <= 0xF4) { cp = lead & 0x07; count = 4; }
+        else return false;
+        if (i + count > text.size()) return false;
+        for (size_t j = 1; j < count; ++j) {
+            const auto tail = static_cast<unsigned char>(text[i + j]);
+            if ((tail & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (tail & 0x3F);
+        }
+        if ((count == 2 && cp < 0x80) || (count == 3 && cp < 0x800) ||
+            (count == 4 && cp < 0x10000) || cp > 0x10FFFF ||
+            (cp >= 0xD800 && cp <= 0xDFFF) || cp < 0x20 ||
+            (cp >= 0x7F && cp <= 0x9F)) return false;
+        i += count;
+    }
+    return true;
+}
+bool TerminalWindow::setDisplayTitle(const std::string &text)
+{
+    if (!validDisplayTitle(text)) return false;
+    displayTitle = text.empty() ? "Terminal " + label : text;
+    if (frame) frame->drawView();
+    return true;
+}
 std::string TerminalWindow::labelFor(uint64_t localId)
 {
     return localId < 26 ? std::string(1, char('A' + localId)) : std::to_string(localId + 1);
@@ -38,40 +73,77 @@ void TerminalWindow::finish()
     }
 }
 std::string TerminalWindow::captionFor(const std::string &label, const SessionMetadata &metadata,
-                                      bool closing, bool resizeFailed)
+                                      bool closing, bool resizeFailed, bool lost, size_t maxCells)
 {
-    std::string text = std::string("Terminal ") + label + " [";
+    return formatCaption("Terminal " + label, metadata, closing, resizeFailed, lost, maxCells);
+}
+std::string TerminalWindow::formatCaption(const std::string &title, const SessionMetadata &metadata,
+                                      bool closing, bool resizeFailed, bool lost, size_t maxCells)
+{
+    std::string state = "[";
     switch (metadata.state) {
-    case SessionState::Starting: text += "starting"; break;
-    case SessionState::Running: text += closing ? "closing" : "live"; break;
-    case SessionState::Lost: text += "backend lost"; break;
-    case SessionState::Closed: text += "closed"; break;
+    case SessionState::Starting: state += lost ? "backend lost" : "starting"; break;
+    case SessionState::Running: state += lost ? "backend lost" : closing ? "closing" : "live"; break;
+    case SessionState::Lost: state += "backend lost"; break;
+    case SessionState::Closed: state += "closed"; break;
     case SessionState::Exited:
         if (metadata.status.kind == ExitKind::Exit)
-            text += "exited " + std::to_string(metadata.status.value);
+            state += "exited " + std::to_string(metadata.status.value);
         else if (metadata.status.kind == ExitKind::Signal) {
-            text += "signal " + std::to_string(metadata.status.value);
-            if (metadata.status.coreDump) text += "; core dump";
-        } else text += "status unavailable";
+            state += "signal " + std::to_string(metadata.status.value);
+            if (metadata.status.coreDump) state += "; core dump";
+        } else state += "status unavailable";
         break;
     }
-    text += "]";
+    state += "]";
     if (metadata.state == SessionState::Exited || metadata.state == SessionState::Closed) {
         switch (metadata.drainReason) {
-        case DrainReason::ByteCap: text += " [tail: byte cap]"; break;
-        case DrainReason::TimeCap: text += " [tail: time cap]"; break;
-        case DrainReason::CreditCap: text += " [tail: credit cap]"; break;
-        case DrainReason::IOError: text += " [tail: I/O error]"; break;
-        case DrainReason::ExplicitClose: text += " [tail: close]"; break;
+        case DrainReason::ByteCap: state += " [tail: byte cap]"; break;
+        case DrainReason::TimeCap: state += " [tail: time cap]"; break;
+        case DrainReason::CreditCap: state += " [tail: credit cap]"; break;
+        case DrainReason::IOError: state += " [tail: I/O error]"; break;
+        case DrainReason::ExplicitClose: state += " [tail: close]"; break;
         default: break;
         }
     }
-    if (resizeFailed) text += " [resize failed]";
-    return text;
+    if (lost && (metadata.state == SessionState::Exited || metadata.state == SessionState::Closed))
+        state += " [backend lost]";
+    if (resizeFailed) state += " [resize failed]";
+    if (!maxCells) return title + " " + state;
+    if (TText::width(state.c_str()) > maxCells) {
+        // A narrow frame cannot carry tail/resize annotations. Preserve the
+        // authoritative completion and the later contact-loss fact first.
+        if (lost && metadata.state == SessionState::Exited) {
+            if (metadata.status.kind == ExitKind::Exit)
+                state = "[exit " + std::to_string(metadata.status.value) + " lost]";
+            else if (metadata.status.kind == ExitKind::Signal)
+                state = "[sig " + std::to_string(metadata.status.value) + " lost]";
+            else
+                state = "[status? lost]";
+        } else if (lost && metadata.state == SessionState::Closed)
+            state = "[closed lost]";
+    }
+    const size_t stateWidth = TText::width(state.c_str());
+    if (stateWidth >= maxCells) return state;
+    const size_t titleLimit = maxCells - stateWidth - 1;
+    size_t offset = 0, width = 0;
+    while (offset < title.size()) {
+        size_t next = offset, cellWidth = 0;
+        if (!TText::next(title.c_str(), next, cellWidth) || width + cellWidth > titleLimit)
+            break;
+        offset = next;
+        width += cellWidth;
+    }
+    return offset ? title.substr(0, offset) + " " + state : state;
 }
-const char *TerminalWindow::getTitle(short)
+std::string TerminalWindow::displayCaption(size_t maxCells) const
 {
-    caption = captionFor(label, endpoint->metadata(), closing != 0, resizeFailed);
+    return formatCaption(displayTitle, endpoint->metadata(), closing != 0,
+                      resizeFailed, authorityLost, maxCells);
+}
+const char *TerminalWindow::getTitle(short maxCells)
+{
+    caption = displayCaption(maxCells > 0 ? size_t(maxCells) : 0);
     if (helpCtx == hcInputGrabbed) caption += " (Input Grab)";
     return caption.c_str();
 }

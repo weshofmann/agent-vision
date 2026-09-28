@@ -45,12 +45,17 @@ across macOS versions or machines. There is no installed background service.
 Use an interactive outer terminal of at least 40 columns by 14 rows. Sessions
 inherit the frontend environment and working directory and execute `$SHELL`
 (falling back to `/bin/sh` if it is not an absolute executable). Shell startup
-files run normally. Ctrl-B opens the upstream-shaped menu: Tab/Shift-Tab changes
-terminal, R starts keyboard movement/resizing, W closes, F maximizes/restores,
-and Q quits. During movement, arrows move, Shift-arrows resize, Ctrl accelerates,
-Enter accepts and Escape cancels. Mouse frames are inherited from Turbo Vision.
-Input Grab is under More; Alt-End releases it. There is no new-window command in
-this two-window slice.
+files run normally. Ctrl-B opens the bounded menu. Terminal has New, Close and
+Rename; Windows has a scrollable Window List, Next, Previous, Move/Resize and
+Maximize/Restore. Text has Select and Paste; Input has Grab and Release. Help,
+Suspend and Quit are on the top level. The Window List includes retained exited
+and lost views. A title is local presentation text of at most 48 UTF-8 bytes;
+empty Rename input restores the default title. Tab and Shift-Tab remain shell
+input; Ctrl-Tab switching is not claimed for Terminal.app. During movement,
+arrows move, Shift-arrows resize, Ctrl accelerates, Enter accepts and Escape
+cancels. Mouse frames are inherited from Turbo Vision. The terminal scroll
+wheel and visible scrollbar navigate finite scrollback. Alt-End releases Input
+Grab.
 
 Exited windows keep their output and authoritative exit/signal status until
 explicit close. Contact loss is displayed separately; it cannot invent a shell

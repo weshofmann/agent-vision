@@ -1,5 +1,7 @@
 #include "core_connection.h"
 #include "window.h"
+#define Uses_TText
+#include <tvision/ttext.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -159,6 +161,29 @@ int captions() {
     m.drainReason = DrainReason::EOFReached;
     check(TerminalWindow::captionFor('B', m, false, true).find("[exited 7] [resize failed]") != std::string::npos,
           "exact exit and failed resize operation are independently visible");
+    check(TerminalWindow::validDisplayTitle("Work \xE6\x97\xA5"), "valid Unicode title is accepted");
+    check(!TerminalWindow::validDisplayTitle(std::string(49, 'a')) &&
+          !TerminalWindow::validDisplayTitle("bad\nname") &&
+          !TerminalWindow::validDisplayTitle("bad\x7f") &&
+          !TerminalWindow::validDisplayTitle("bad\xC2\x80") &&
+          !TerminalWindow::validDisplayTitle("bad\xC3"),
+          "overlong, controls, DEL, C1 and malformed UTF-8 are rejected");
+    check(TerminalWindow::captionFor("Work", m, false, false, true).find("[exited 7] [backend lost]") != std::string::npos,
+          "known exit remains visible with later contact loss");
+    m.state = SessionState::Running;
+    check(TerminalWindow::captionFor("Work", m, true, false, true).find("[backend lost]") != std::string::npos &&
+          TerminalWindow::captionFor("Work", m, true, false, true).find("closing") == std::string::npos,
+          "loss during close never claims a completed process state");
+    m.state = SessionState::Exited;
+    m.status = {ExitKind::Exit, 7, false};
+    const auto compact = TerminalWindow::formatCaption("Work", m, false, false, true, 14);
+    check(TText::width(compact.c_str()) <= 14 && compact.find("7") != std::string::npos &&
+          compact.find("lost") != std::string::npos,
+          "narrow frame keeps both known exit and later loss visible");
+    m.state = SessionState::Running;
+    auto clipped = TerminalWindow::captionFor("\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C", m, false, false, false, 20);
+    check(clipped.find("[live]") != std::string::npos && TText::width(clipped.c_str()) <= 20,
+          "narrow frame reserves state and clips wide Unicode at a whole character");
     return 0;
 }
 

@@ -4,6 +4,7 @@
 #include "core_connection.h"
 #include "frontend_cleanup.h"
 #include "startup_adoption.h"
+#include "window_list.h"
 #include <condition_variable>
 #include <map>
 #include <mutex>
@@ -13,6 +14,7 @@
 namespace tvterm { class TerminalController; }
 
 class AgentVisionApp final : public TApplication {
+    friend class WindowListDialog;
     std::shared_ptr<agentvision::CoreConnection> connection;
     const std::thread::id uiThread {std::this_thread::get_id()};
     std::mutex cleanupMutex;
@@ -44,6 +46,11 @@ class AgentVisionApp final : public TApplication {
     void stopPresentations();
     void acknowledgeCleanup();
     void newTerminal();
+    void renameTerminal();
+    void openWindowList();
+    void showWorkbenchHelp();
+    std::vector<WindowListRow> windowRows();
+    class TerminalWindow *findWindow(const std::string &);
     void serviceCoreEvents();
     void adoptPrepared();
     void clearCreates();

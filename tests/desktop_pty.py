@@ -54,16 +54,18 @@ def resources(pid):
     return {'threads': threads, 'fds': actual//8}
 
 class Desktop:
-    def __init__(self, binary, folder, ignored_sigchld=False, extra_env=None):
+    def __init__(self, binary, folder, ignored_sigchld=False, extra_env=None,
+                 columns=120, rows=40):
         self.folder = folder
         folder.mkdir(parents=True, exist_ok=True)
         # These two owned result files cannot be reused across probe runs.
         for name in ('app-pid.txt', 'outer-result.json'):
             (folder/name).unlink(missing_ok=True)
         self.master, self.slave = pty.openpty()
-        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ,
+                    struct.pack('HHHH', rows, columns, 0, 0))
         self.outer_before = termios.tcgetattr(self.slave)
-        self.screen = Screen(120, 40)
+        self.screen = Screen(columns, rows)
         self.stream = pyte.ByteStream(self.screen)
         self.raw = bytearray()
         self.dsr = 0
@@ -135,8 +137,15 @@ class Desktop:
         self.send('\r')
     def menu(self, key):
         self.send('\x02')
-        self.wait(lambda: self.contains('Close Term'), 'Ctrl-B menu did not open')
-        self.send(key)
+        self.wait(lambda: self.contains('Terminal') and self.contains('Windows'),
+                  'bounded Ctrl-B menu did not open')
+        # Preserve the older scenario vocabulary while traversing the grouped
+        # user-facing menu. A plain Tab remains shell input, never a UI binding.
+        route = {'n': 'tn', 'w': 'tc', 'e': 'tr', 'r': 'wm', '\t': 'wn',
+                 's': 'xs', 'm': 'i', 'q': 'q', 'l': 'wl',
+                 'p': 'wp', 'f': 'wz', 'h': 'h'}[key]
+        for part in route:
+            self.send(part)
     def confirm(self, yes):
         self.send('\r' if yes else '\t\r')
         self.wait(lambda: not self.contains(' Confirm '), 'confirmation did not finish')
@@ -903,11 +912,48 @@ def dynamic_pending_quit(binary, folder):
                 'confirmed_quit_rejects_late_created': True, **restored}
     finally: d.close()
 
+def controls_minimum(binary, folder):
+    d = Desktop(binary, folder, columns=40, rows=14)
+    try:
+        d.wait(lambda: d.contains('[live]'), 'minimum desktop did not draw a live view')
+        d.menu('h')
+        d.wait(lambda: d.contains('Workbench Help') and d.contains('Tab to shell'),
+               'minimum Help was clipped or unavailable')
+        d.send('\r')
+        d.menu('l')
+        d.wait(lambda: d.contains('Window List') and d.contains('Terminal A [live]') and
+                          d.contains('Terminal B [live]'),
+               'minimum Window List did not show both live states')
+        d.send('\x1b')
+        d.menu('e')
+        d.wait(lambda: d.contains('Rename terminal'), 'minimum Rename dialog unavailable')
+        d.send('\x1b')
+        d.menu('\t'); d.menu('p')
+        d.menu('r')
+        d.wait(lambda: d.contains('Arrows') and d.contains('Move'),
+               'minimum Move/Resize unavailable')
+        d.send('\x1b')
+        d.menu('f'); d.menu('f')
+        d.menu('s')
+        d.wait(lambda: d.contains('Copy'), 'minimum Select unavailable')
+        d.send('\x1b')
+        d.menu('n')
+        d.menu('l')
+        d.wait(lambda: d.contains('Terminal C [live]'),
+               'New after grouped-menu navigation did not appear in list')
+        d.send('\x1b')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'minimum Quit count was wrong')
+        d.confirm(True)
+        restored = d.restore()
+        return {'minimum_40x14_controls': True, 'list_shows_dynamic_view': True, **restored}
+    finally: d.close()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'controls-minimum', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
@@ -918,6 +964,7 @@ if __name__ == '__main__':
              'dynamic-unrelated-close-modal': dynamic_unrelated_close_modal,
              'dynamic-capacity': dynamic_capacity,
              'dynamic-cycles': dynamic_cycles, 'dynamic-pending-quit': dynamic_pending_quit,
+             'controls-minimum': controls_minimum,
              'loss-modal': loss_modal,
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
              'startup-before': startup_before, 'startup-after': startup_after,
