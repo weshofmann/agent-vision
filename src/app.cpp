@@ -6,6 +6,7 @@
 #include "ipc_session.h"
 #include <chrono>
 #include <memory>
+#include <utility>
 #define Uses_TMenuPopup
 #define Uses_TMenu
 #define Uses_TMenuItem
@@ -112,11 +113,155 @@ bool AgentVisionApp::addTerminal(const TRect &bounds, char label)
         startupFailure = "Cannot create terminal presentation.";
         return false;
     }
-    insertWindow(new TerminalWindow(bounds, *controller, std::move(endpoint), label));
+    insertWindow(new TerminalWindow(bounds, *controller, std::move(endpoint),
+                                    std::string(1, label)));
     return true;
+}
+void AgentVisionApp::newTerminal()
+{
+    if (!connection || !ready || stopped || admissionClosed) return;
+    size_t views = 0;
+    message(this, evBroadcast, cmCountViews, &views);
+    if (views + pendingCreates.size() + preparedCreates.size() >= 16) {
+        messageBox("Terminal capacity is 16 windows; close one to create another.", mfError | mfOKButton);
+        return;
+    }
+    const auto id = nextViewId++;
+    TPoint available = deskTop->size;
+    const int width = available.x * 3 / 4, height = available.y * 3 / 4;
+    const int x = int((id * 3) % unsigned(available.x - width + 1));
+    const int y = int((id * 2) % unsigned(available.y - height + 1));
+    TRect bounds(x, y, x + width, y + height);
+    auto size = TerminalWindow::viewSize(bounds);
+    // Create is locally admitted and queued by CoreConnection; no reply wait on the UI thread.
+    auto request = connection->createSession(uint16_t(size.y), uint16_t(size.x));
+    if (!request) {
+        messageBox("Terminal admission is unavailable.", mfError | mfOKButton);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> gate(cleanupMutex);
+        if (startupAdoption.mayAdopt() && !admissionClosed && !stopped) {
+            pendingCreates.emplace(request, PendingCreate{bounds, TerminalWindow::labelFor(id)});
+            return;
+        }
+    }
+    // A late Created has no pending owner and is closed by serviceCoreEvents if still authoritative.
+}
+bool AgentVisionApp::mayInsertTerminal()
+{
+    return TopView() == this && deskTop &&
+           !(deskTop->current && (deskTop->current->state & sfDragging)) &&
+           canMoveFocus();
+}
+void AgentVisionApp::clearCreates()
+{
+    std::vector<PreparedCreate> local;
+    {
+        std::lock_guard<std::mutex> gate(cleanupMutex);
+        pendingCreates.clear();
+        local.swap(preparedCreates);
+    }
+    for (auto &item : local)
+        item.controller->shutDown(); // Local cancellation only; no shared connection close.
+}
+void AgentVisionApp::adoptPrepared()
+{
+    if (!mayInsertTerminal()) return;
+    while (!preparedCreates.empty() && mayInsertTerminal()) {
+        auto item = std::move(preparedCreates.front());
+        preparedCreates.erase(preparedCreates.begin());
+        bool inserted = false;
+        bool attempted = false;
+        {
+            std::lock_guard<std::mutex> gate(cleanupMutex);
+            if (startupAdoption.mayAdopt() && !admissionClosed && !stopped) {
+                attempted = true;
+                inserted = insertWindow(new TerminalWindow(item.bounds, *item.controller,
+                                           item.endpoint, std::move(item.label))) != nullptr;
+            }
+        }
+        if (!inserted) {
+            // insertWindow destroys a rejected view; without an attempt, ownership stayed here.
+            if (!attempted) item.controller->shutDown();
+            connection->closeSession(item.endpoint->metadata().id);
+            if (attempted) creationFailure = "Terminal presentation is unavailable.";
+        }
+    }
+}
+void AgentVisionApp::serviceCoreEvents()
+{
+    if (servicingCoreEvents || !connection) return;
+    servicingCoreEvents = true;
+    {
+        struct Guard { bool &flag; ~Guard() { flag = false; } } guard{servicingCoreEvents};
+        agentvision::ConnectionEvent event;
+        for (unsigned i = 0; i < 4 && connection->pollEvent(event); ++i) {
+            if (event.kind == agentvision::ConnectionEvent::Kind::Created) {
+                auto pending = pendingCreates.find(event.request);
+                if (pending == pendingCreates.end()) {
+                    TerminalSessionQuery query{event.session, false};
+                    message(this, evBroadcast, cmFindSession, &query);
+                    bool prepared = false;
+                    for (const auto &item : preparedCreates)
+                        prepared |= item.endpoint->metadata().id == event.session;
+                    if (!query.found && !prepared)
+                        connection->closeSession(event.session);
+                } else {
+                    auto item = std::move(pending->second);
+                    pendingCreates.erase(pending);
+                    auto endpoint = connection->endpoint(event.session);
+                    bool allowed;
+                    {
+                        std::lock_guard<std::mutex> gate(cleanupMutex);
+                        allowed = startupAdoption.mayAdopt() && !admissionClosed && !stopped;
+                        if (allowed && endpoint) {
+                            auto size = TerminalWindow::viewSize(item.bounds);
+                            tvterm::VTermEmulatorFactory factory;
+                            auto transport = std::unique_ptr<tvterm::SessionTransport>(
+                                new agentvision::IpcSessionTransport(connection, endpoint));
+                            auto *controller = tvterm::TerminalController::createWithTransport(
+                                size, factory, std::move(transport));
+                            if (controller)
+                                preparedCreates.push_back({item.bounds, std::move(item.label),
+                                                           endpoint, controller});
+                            else
+                                allowed = false;
+                        }
+                    }
+                    if (!allowed || !endpoint) {
+                        connection->closeSession(event.session);
+                        if (allowed && !endpoint)
+                            creationFailure = "Terminal presentation is unavailable.";
+                        else if (!allowed && endpoint && !admissionClosed && !stopped)
+                            creationFailure = "Terminal presentation is unavailable.";
+                    }
+                }
+            } else if (event.kind == agentvision::ConnectionEvent::Kind::RequestError) {
+                auto pending = pendingCreates.find(event.request);
+                if (pending != pendingCreates.end()) {
+                    pendingCreates.erase(pending);
+                    creationFailure = event.errorCode == 5 ? "Terminal capacity is 16 sessions." :
+                        event.errorCode == 6 ? "Cannot launch terminal shell." :
+                        "Terminal creation failed.";
+                }
+            } else if (event.kind == agentvision::ConnectionEvent::Kind::Lost) {
+                clearCreates();
+            }
+            message(this, evBroadcast, cmCoreEvent, &event);
+        }
+        adoptPrepared();
+        message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
+    }
+    if (!creationFailure.empty() && TopView() == this && mayInsertTerminal()) {
+        auto failure = std::move(creationFailure);
+        creationFailure.clear();
+        messageBox(mfError | mfOKButton, "%s", failure.c_str());
+    }
 }
 void AgentVisionApp::stopPresentations()
 {
+    clearCreates();
     if (deskTop) message(this, evBroadcast, cmStopPresentations, nullptr);
     if (!suspended) {
         suspend(); // Actual outer-terminal restoration, before lifecycle acknowledgement.
@@ -183,11 +328,18 @@ void AgentVisionApp::serviceCleanup()
 void AgentVisionApp::getEvent(TEvent &event)
 {
     serviceCleanup();
+    serviceCoreEvents();
     TApplication::getEvent(event);
     serviceCleanup(); // Covers nested modal loops and continuous input, not just idle.
+    serviceCoreEvents();
 }
 void AgentVisionApp::shutDown()
 {
+    {
+        std::lock_guard<std::mutex> gate(cleanupMutex);
+        admissionClosed = true;
+        startupAdoption.cleanupBegun();
+    }
     stopped = true;
     if (connection) connection->shutdown();
     stopPresentations();
@@ -231,17 +383,17 @@ TStatusLine *AgentVisionApp::initStatusLine(TRect r)
 }
 void AgentVisionApp::idle()
 {
-    agentvision::ConnectionEvent event;
-    while (connection && connection->pollEvent(event))
-        message(this, evBroadcast, cmCoreEvent, &event);
+    serviceCoreEvents();
     TApplication::idle();
-    message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
 }
 void AgentVisionApp::handleEvent(TEvent &event)
 {
     TApplication::handleEvent(event);
     if (event.what == evCommand && event.message.command == cmMenu) {
         openMenu();
+        clearEvent(event);
+    } else if (event.what == evCommand && event.message.command == cmNewTerminal) {
+        newTerminal();
         clearEvent(event);
     }
 }
@@ -250,8 +402,15 @@ Boolean AgentVisionApp::valid(ushort command)
     if (command == cmQuit) {
         size_t count = 0;
         message(this, evBroadcast, cmCountLive, &count);
-        return !count || messageBox(mfConfirmation | mfYesButton | mfNoButton,
-            "Terminate %zu live terminal(s) and quit?", count) == cmYes;
+        count += pendingCreates.size() + preparedCreates.size();
+        const bool confirmed = !count || messageBox(mfConfirmation | mfYesButton | mfNoButton,
+            "Terminate %zu live/starting terminal(s) and quit?", count) == cmYes;
+        if (confirmed) {
+            std::lock_guard<std::mutex> gate(cleanupMutex);
+            admissionClosed = true;
+            startupAdoption.cleanupBegun();
+        }
+        return confirmed;
     }
     return TApplication::valid(command);
 }
@@ -268,6 +427,7 @@ public:
 void AgentVisionApp::openMenu()
 {
     TMenuItem &items =
+        *new TMenuItem("New Term", cmNewTerminal, 'N', hcNoContext, "~N~") +
         *new TMenuItem("Close Term", cmClose, 'W', hcNoContext, "~W~") + newLine() +
         *new TMenuItem("Next Term", cmNext, kbTab, hcNoContext, "~Tab~") +
         *new TMenuItem("Previous Term", cmPrev, kbShiftTab, hcNoContext, "~Shift-Tab~") +

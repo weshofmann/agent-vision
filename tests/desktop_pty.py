@@ -572,15 +572,355 @@ def scrolling(binary, folder):
                 'owned_resources': {'initial': initial, 'after_close': after_close}, **restored}
     finally: d.close()
 
+def dynamic_basic(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'two initial windows missing')
+        d.menu('n')
+        d.wait(lambda: d.contains('Terminal C [live]'), 'New Terminal did not create C')
+        d.menu('n')
+        d.wait(lambda: d.contains('Terminal D [live]'), 'second New Terminal did not create D')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 4 live'), 'Quit did not count four live terminals')
+        d.confirm(True)
+        restored = d.restore()
+        return {'four_distinct_windows': True, 'four_live_quit': True, **restored}
+    finally: d.close()
+
+def dynamic_four_shells(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'initial pair missing')
+        d.menu('n')
+        d.wait(lambda: d.contains('Terminal C [live]'), 'C missing')
+        c_pid, c_tty = shell_identity(d, 'C', '/tmp')
+        d.menu('n')
+        d.wait(lambda: d.contains('Terminal D [live]'), 'D missing')
+        d_pid, d_tty = shell_identity(d, 'D', '/')
+        assert c_pid != d_pid and c_tty != d_tty, 'C and D share shell identity'
+        def children(parent):
+            rows = subprocess.run(['/bin/ps', '-axo', 'pid=,ppid='], capture_output=True,
+                                  text=True, check=True).stdout.splitlines()
+            return [int(row.split()[0]) for row in rows
+                    if len(row.split()) == 2 and int(row.split()[1]) == parent]
+        cores = children(d.app_pid)
+        assert len(cores) == 1 and len(children(cores[0])) == 4, \
+            'four views did not own four distinct direct Go-core shells'
+        initial_d = d.bounds('D')
+        d.menu('r')
+        d.send('\x1b[1;2D'*4 + '\x1b[1;2A'*2 + '\r')
+        resized_d = d.bounds('D')
+        assert resized_d != initial_d, 'D resize did not change presentation bounds'
+        rows, cols = inner(resized_d)
+        d.command("printf 'D_SIZE_'; stty size")
+        d.wait(lambda: d.contains(f'D_SIZE_{rows} {cols}'), 'D PTY size did not follow resize')
+        d.command("printf 'D_TAIL\\n'; exit 7")
+        d.wait(lambda: d.contains('Terminal D [exited 7]') and d.contains('D_TAIL'),
+               'D exact exit status/output was not retained')
+        assert d.absent(d_pid), 'D child remained after natural exit'
+        for _ in range(3): d.menu('\t')
+        d.command("printf 'C_STATE_%s_%s\\n' \"$label\" \"$PWD\"")
+        d.wait(lambda: d.contains('C_STATE_C_/tmp'), 'C state changed after D exit')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'retained D was counted as live')
+        d.confirm(True)
+        restored = d.restore()
+        assert d.absent(cores[0]) and d.absent(c_pid), 'owned core/shell remained after Quit'
+        return {'four_direct_shells': True, 'independent_resize': [rows, cols],
+                'retained_exact_exit': True, 'independent_c_state': True, **restored}
+    finally: d.close()
+
+def dynamic_modal(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    def creates():
+        return sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests'])
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('n')
+        d.wait(lambda: creates() == 3, 'asynchronous third Create was not sent')
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal'), 'close confirmation missing')
+        control.write_text('created')
+        for _ in range(20): d.send('x')
+        d.wait(lambda: any(row['type'] == 14 and row['session'] == 3
+                           for row in json.loads(audit.read_text())['requests']),
+               'prepared C did not consume output while modal and input were active')
+        assert d.contains('Terminate live terminal') and not d.contains('Terminal C ['), \
+            'Created stole modal focus or inserted early'
+        d.confirm(False)
+        d.wait(lambda: d.contains('Terminal C [live]') and d.contains('DYNAMIC_READY'),
+               'prepared C was not inserted after modal cancellation')
+        d.menu('n')
+        d.wait(lambda: creates() == 4, 'fourth Create was not sent')
+        control.write_text('error')
+        d.wait(lambda: d.contains('Cannot launch terminal shell'),
+               'Create Error did not explain launch failure')
+        d.send('\r')
+        d.wait(lambda: not d.contains('Cannot launch terminal shell'),
+               'Create Error dialog did not dismiss')
+        d.menu('n')
+        d.wait(lambda: creates() == 5, 'Error did not free pending admission')
+        control.write_text('created')
+        d.wait(lambda: d.contains('Terminal E [live]'), 'replacement reused failed view label')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 4 live'), 'Quit count lost dynamic sessions')
+        d.confirm(True)
+        restored = d.restore()
+        return {'modal_prepared_output': True, 'error_releases_pending': True,
+                'stable_labels': True, **restored}
+    finally: d.close()
+
+def dynamic_drag(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('n')
+        d.wait(lambda: sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests']) == 3,
+               'pending third Create missing')
+        original = d.bounds('B')
+        d.menu('r')
+        d.wait(lambda: d.contains('Arrows') and d.contains('Move'), 'keyboard drag did not begin')
+        control.write_text('created')
+        for _ in range(12): d.send('\x1b[C')
+        d.wait(lambda: any(row['type'] == 14 and row['session'] == 3
+                           for row in json.loads(audit.read_text())['requests']),
+               'prepared controller did not consume output during drag')
+        assert not d.contains('Terminal C ['), 'Created inserted during drag'
+        d.wait(lambda: any('Terminal B [live]' in row and
+                           row.find('┌') != original[0] for row in d.screen.display),
+               'B did not move within its drag stack')
+        d.send('\r')
+        d.wait(lambda: d.contains('Terminal C [live]'), 'C did not insert after drag')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'Quit count after drag wrong')
+        d.confirm(True)
+        restored = d.restore()
+        return {'drag_defers_insertion': True, 'prepared_output_during_drag': True,
+                'drag_movement_preserved': True, **restored}
+    finally: d.close()
+
+def dynamic_error_modal(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('n'); d.menu('n')
+        d.wait(lambda: sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests']) == 4,
+               'two pending Create requests were not sent')
+        control.write_text('error')
+        d.wait(lambda: d.contains('Cannot launch terminal shell'),
+               'first Create Error did not open dialog')
+        control.write_text('created')
+        for _ in range(20): d.send('x')
+        d.wait(lambda: any(row['type'] == 14 and row['session'] == 3
+                           for row in json.loads(audit.read_text())['requests']),
+               'second Created was not serviced inside Create-error dialog')
+        assert d.contains('Cannot launch terminal shell') and not d.contains('Terminal D ['), \
+            'second Created stole error-dialog focus'
+        d.send('\r')
+        d.wait(lambda: d.contains('Terminal D [live]') and d.contains('DYNAMIC_READY'),
+               'prepared D did not insert after error dialog')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'Quit count after Error wrong')
+        d.confirm(True)
+        restored = d.restore()
+        return {'error_dialog_keeps_event_service': True,
+                'prepared_adoption_after_dialog': True, **restored}
+    finally: d.close()
+
+def dynamic_unrelated_close_modal(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'close-drag', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        b_left, _, _, b_bottom = d.bounds('B')
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal B'), 'B close confirmation missing')
+        d.confirm(True)
+        d.wait(lambda: d.contains('Terminal B [closing]'), 'B Close was not held')
+        d.menu('\t')
+        _, _, _, a_bottom = d.bounds('A')
+        assert b_bottom - 1 >= a_bottom, 'B corner is not below A frame'
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal A'), 'A modal did not open')
+        def b_corner(): return d.screen.display[b_bottom - 1][b_left]
+        assert b_corner() == '└', 'B corner is not exposed beneath A modal'
+        pending_control = folder/'control.pending'
+        pending_control.write_text('closed')
+        os.replace(pending_control, control)
+        for _ in range(12): d.send('x')
+        d.wait(lambda: json.loads(audit.read_text())['released_close_count'] == 1,
+               'B Closed was not released')
+        d.wait(lambda: b_corner() == '░' and d.contains('Terminate live terminal A'),
+               'B corner did not clear safely beneath A confirmation')
+        d.confirm(False)
+        d.wait(lambda: not d.contains('Terminal B ['), 'B did not retire after A modal')
+        assert d.contains('Terminal A [live]'), 'A was lost after canceling confirmation'
+        d.command('progress')
+        d.wait(lambda: d.contains('A_PROGRESS'), 'A survivor stopped handling input')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 1 live'), 'survivor Quit count wrong')
+        d.confirm(True)
+        restored = d.restore()
+        record = json.loads(audit.read_text())
+        assert sum(row['type'] == 7 for row in record['requests']) == 1, \
+            'B Close was issued more than once'
+        return {'unrelated_modal_survives_close': True,
+                'single_retirement': True, 'survivor_input': True, **restored}
+    finally: d.close()
+
+def dynamic_capacity(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'initial pair missing')
+        for index in range(2, 16):
+            label = chr(ord('A') + index)
+            d.menu('n')
+            d.wait(lambda: d.contains(f'Terminal {label} [live]'),
+                   f'New Terminal did not create {label}')
+        d.menu('n')
+        d.wait(lambda: d.contains('Terminal capacity is 16 windows'),
+               '17th New did not report the local view cap')
+        d.send('\r')
+        d.wait(lambda: not d.contains('Terminal capacity is 16 windows'),
+               'capacity dialog did not dismiss')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 16 live'), 'capacity changed Quit live count')
+        d.confirm(True)
+        restored = d.restore()
+        return {'bounded_sixteen_views': True, 'truthful_capacity': True, **restored}
+    finally: d.close()
+
+def dynamic_cycles(binary, folder):
+    d = Desktop(binary, folder)
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'initial pair missing')
+        for label in ('B', 'A'):
+            d.menu('w')
+            d.wait(lambda: d.contains('Terminate live terminal'), 'live close did not confirm')
+            d.confirm(True)
+            d.wait(lambda: not d.contains(f'Terminal {label} ['), f'{label} did not retire')
+        for label in ('C', 'D', 'E', 'F'):
+            d.menu('n')
+            d.wait(lambda: d.contains(f'Terminal {label} [live]'),
+                   f'New after last close did not create {label}')
+            d.menu('w')
+            d.wait(lambda: d.contains('Terminate live terminal'), 'cycle close did not confirm')
+            d.confirm(True)
+            d.wait(lambda: not d.contains(f'Terminal {label} ['),
+                   f'{label} did not retire before next cycle')
+        d.menu('q')
+        restored = d.restore()
+        return {'close_last_create_again': True, 'finite_create_close_cycles': 4, **restored}
+    finally: d.close()
+
+def dynamic_pending_quit(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    def creates():
+        return sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests'])
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        for label in ('B', 'A'):
+            d.menu('w')
+            d.wait(lambda: d.contains('Terminate live terminal'), 'live close confirmation missing')
+            d.confirm(True)
+            d.wait(lambda: not d.contains(f'Terminal {label} ['),
+                   f'{label} did not retire before pending-only Quit')
+        d.menu('n')
+        d.wait(lambda: creates() == 3, 'pending C Create was not sent')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 1 live/starting'),
+               'pending-only Quit did not count Create')
+        d.confirm(False)
+        control.write_text('created')
+        d.wait(lambda: d.contains('Terminal C [live]'),
+               'canceled Quit discarded pending Create')
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal'), 'C close confirmation missing')
+        d.confirm(True)
+        d.wait(lambda: not d.contains('Terminal C ['), 'C did not retire')
+        d.menu('n')
+        d.wait(lambda: creates() == 4, 'pending D Create was not sent')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 1 live/starting'),
+               'second pending-only Quit did not count Create')
+        d.confirm(True)
+        restored = d.restore()
+        record = json.loads(audit.read_text())
+        assert record['created'] == 4 and not d.contains('Terminal D ['), \
+            'late Created after confirmed Quit became a view'
+        return {'pending_quit_cancel_preserves_create': True,
+                'confirmed_quit_rejects_late_created': True, **restored}
+    finally: d.close()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
-             'quit-both': quit_both, 'scrolling': scrolling, 'loss-modal': loss_modal,
+             'quit-both': quit_both, 'scrolling': scrolling, 'dynamic-basic': dynamic_basic,
+             'dynamic-four-shells': dynamic_four_shells,
+             'dynamic-modal': dynamic_modal, 'dynamic-drag': dynamic_drag,
+             'dynamic-error-modal': dynamic_error_modal,
+             'dynamic-unrelated-close-modal': dynamic_unrelated_close_modal,
+             'dynamic-capacity': dynamic_capacity,
+             'dynamic-cycles': dynamic_cycles, 'dynamic-pending-quit': dynamic_pending_quit,
+             'loss-modal': loss_modal,
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
              'startup-before': startup_before, 'startup-after': startup_after,
              'startup-second': startup_second, 'close-barrier': close_barrier,

@@ -12,11 +12,19 @@ const tvterm::TVTermConstants TerminalWindow::appConsts = {
     cmGrabInput, cmReleaseInput, cmStartSelection, hcInputGrabbed, hcSelecting
 };
 TerminalWindow::TerminalWindow(const TRect &bounds, tvterm::TerminalController &term,
-                               std::shared_ptr<SessionEndpoint> session, char name) noexcept :
+                               std::shared_ptr<SessionEndpoint> session, std::string name) noexcept :
     TWindowInit(&tvterm::BasicTerminalWindow::initFrame),
     BasicTerminalWindow(bounds, term, appConsts), controller(term),
-    endpoint(std::move(session)), label(name)
+    endpoint(std::move(session)), label(std::move(name))
 {}
+std::string TerminalWindow::labelFor(uint64_t localId)
+{
+    return localId < 26 ? std::string(1, char('A' + localId)) : std::to_string(localId + 1);
+}
+bool TerminalWindow::ownsSession(SessionId id) const noexcept
+{
+    return endpoint->metadata().id == id;
+}
 bool TerminalWindow::isLive() const noexcept
 {
     auto state = endpoint->metadata().state;
@@ -29,7 +37,7 @@ void TerminalWindow::finish()
         finished = true;
     }
 }
-std::string TerminalWindow::captionFor(char label, const SessionMetadata &metadata,
+std::string TerminalWindow::captionFor(const std::string &label, const SessionMetadata &metadata,
                                       bool closing, bool resizeFailed)
 {
     std::string text = std::string("Terminal ") + label + " [";
@@ -101,6 +109,12 @@ void TerminalWindow::handleEvent(TEvent &event)
         }
         if (event.message.command == cmCountLive && isLive())
             ++*static_cast<size_t *>(event.message.infoPtr);
+        if (event.message.command == cmCountViews)
+            ++*static_cast<size_t *>(event.message.infoPtr);
+        if (event.message.command == cmFindSession && event.message.infoPtr) {
+            auto &query = *static_cast<TerminalSessionQuery *>(event.message.infoPtr);
+            if (ownsSession(query.id)) query.found = true;
+        }
     }
     // TerminalController itself suppresses emitted process input after End/Lost.
     // Keep selection commands and local navigation flowing through TerminalView.
@@ -111,7 +125,7 @@ void TerminalWindow::close()
 {
     if (closing && !authorityLost) return;
     if (isLive() && messageBox(mfConfirmation | mfYesButton | mfNoButton,
-                              "Terminate live terminal %c and close it?", label) != cmYes)
+                              "Terminate live terminal %s and close it?", label.c_str()) != cmYes)
         return;
     auto state = endpoint->metadata().state;
     if (authorityLost || state == SessionState::Lost || state == SessionState::Closed) {
