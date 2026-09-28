@@ -502,8 +502,14 @@ def synthetic_desktop(binary, folder, mode):
             pending_control.write_text('lose')
             os.replace(pending_control, control)
             d.wait(lambda: d.raw.count(b'\x1b[?1049h') >= 2, 'known-exit loss did not restore/resume')
-            d.wait(lambda: d.contains('Terminal A [backend lost]') and
-                              d.contains('Terminal B [exited 7] [backend lost]'),
+            def loss_frames():
+                b_rows = (row for row in d.screen.display
+                          if '╔' in row and 'Terminal B [exited 7]' in row and
+                          '[backend lost]' in row)
+                return d.contains('Terminal A [backend lost]') and any(
+                    row.index('Terminal B [exited 7]') < row.index('[backend lost]')
+                    for row in b_rows)
+            d.wait(loss_frames,
                    'connection-wide loss did not redraw live and known-exit frame captions')
             d.menu('w')
             d.wait(lambda: not d.contains('Terminal B ['), 'known exited/pending Close window could not dismiss after loss')
