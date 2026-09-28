@@ -678,6 +678,45 @@ def dynamic_modal(binary, folder):
                 'stable_labels': True, **restored}
     finally: d.close()
 
+def dynamic_drag(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('n')
+        d.wait(lambda: sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests']) == 3,
+               'pending third Create missing')
+        original = d.bounds('B')
+        d.menu('r')
+        d.wait(lambda: d.contains('Arrows') and d.contains('Move'), 'keyboard drag did not begin')
+        control.write_text('created')
+        for _ in range(12): d.send('\x1b[C')
+        d.wait(lambda: any(row['type'] == 14 and row['session'] == 3
+                           for row in json.loads(audit.read_text())['requests']),
+               'prepared controller did not consume output during drag')
+        assert not d.contains('Terminal C ['), 'Created inserted during drag'
+        d.wait(lambda: any('Terminal B [live]' in row and
+                           row.find('┌') != original[0] for row in d.screen.display),
+               'B did not move within its drag stack')
+        d.send('\r')
+        d.wait(lambda: d.contains('Terminal C [live]'), 'C did not insert after drag')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'Quit count after drag wrong')
+        d.confirm(True)
+        restored = d.restore()
+        return {'drag_defers_insertion': True, 'prepared_output_during_drag': True,
+                'drag_movement_preserved': True, **restored}
+    finally: d.close()
+
 def dynamic_capacity(binary, folder):
     d = Desktop(binary, folder)
     try:
@@ -778,13 +817,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
              'quit-both': quit_both, 'scrolling': scrolling, 'dynamic-basic': dynamic_basic,
              'dynamic-four-shells': dynamic_four_shells,
-             'dynamic-modal': dynamic_modal, 'dynamic-capacity': dynamic_capacity,
+             'dynamic-modal': dynamic_modal, 'dynamic-drag': dynamic_drag,
+             'dynamic-capacity': dynamic_capacity,
              'dynamic-cycles': dynamic_cycles, 'dynamic-pending-quit': dynamic_pending_quit,
              'loss-modal': loss_modal,
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
