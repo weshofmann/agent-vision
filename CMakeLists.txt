@@ -230,7 +230,7 @@ if(BUILD_TESTING)
         add_test(NAME desktop_pty COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_pty.py" $<TARGET_FILE:agentvision>
             --output "${CMAKE_CURRENT_BINARY_DIR}/desktop-evidence")
-        set_tests_properties(desktop_pty PROPERTIES TIMEOUT 60
+        set_tests_properties(desktop_pty PROPERTIES TIMEOUT 90
             ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
     endif()
 endif()

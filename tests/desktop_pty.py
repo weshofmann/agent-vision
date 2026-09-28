@@ -798,7 +798,9 @@ def dynamic_unrelated_close_modal(binary, folder):
         d.wait(lambda: d.contains('Terminate live terminal A'), 'A modal did not open')
         def b_corner(): return d.screen.display[b_bottom - 1][b_left]
         assert b_corner() == '└', 'B corner is not exposed beneath A modal'
-        control.write_text('closed')
+        pending_control = folder/'control.pending'
+        pending_control.write_text('closed')
+        os.replace(pending_control, control)
         for _ in range(12): d.send('x')
         d.wait(lambda: json.loads(audit.read_text())['released_close_count'] == 1,
                'B Closed was not released')
