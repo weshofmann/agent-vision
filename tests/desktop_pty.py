@@ -1001,7 +1001,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'controls-minimum', 'controls-long-status', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'controls-minimum', 'controls-long-status', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
