@@ -8,7 +8,7 @@
 class TerminalWindow final : public tvterm::BasicTerminalWindow {
     tvterm::TerminalController &controller;
     std::shared_ptr<agentvision::SessionEndpoint> endpoint;
-    const char label;
+    const std::string label;
     agentvision::RequestId closing {0};
     bool closeCompleted {false}, finished {false}, resizeFailed {false}, authorityLost {false};
     unsigned eventDepth {0};
@@ -17,9 +17,15 @@ class TerminalWindow final : public tvterm::BasicTerminalWindow {
 public:
     static const tvterm::TVTermConstants appConsts;
     TerminalWindow(const TRect &, tvterm::TerminalController &,
-                   std::shared_ptr<agentvision::SessionEndpoint>, char label) noexcept;
-    static std::string captionFor(char, const agentvision::SessionMetadata &, bool closing = false,
+                   std::shared_ptr<agentvision::SessionEndpoint>, std::string label) noexcept;
+    static std::string captionFor(const std::string &, const agentvision::SessionMetadata &, bool closing = false,
                                   bool resizeFailed = false);
+    static std::string captionFor(char label, const agentvision::SessionMetadata &metadata,
+                                  bool closing = false, bool resizeFailed = false) {
+        return captionFor(std::string(1, label), metadata, closing, resizeFailed);
+    }
+    static std::string labelFor(uint64_t localId);
+    bool ownsSession(agentvision::SessionId id) const noexcept;
     bool isLive() const noexcept;
     const char *getTitle(short) override;
     void handleEvent(TEvent &) override;

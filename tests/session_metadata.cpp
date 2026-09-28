@@ -152,6 +152,8 @@ int captions() {
     m.state = SessionState::Closed;
     check(TerminalWindow::captionFor('B', m).find("[closed]") != std::string::npos,
           "closed remains a typed lifecycle state");
+    check(TerminalWindow::captionFor("C", m).find("Terminal C [closed]") != std::string::npos,
+          "dynamic terminal label remains independent of session identity");
     m.state = SessionState::Exited;
     m.status = {ExitKind::Exit, 7, false};
     m.drainReason = DrainReason::EOFReached;

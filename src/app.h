@@ -5,9 +5,12 @@
 #include "frontend_cleanup.h"
 #include "startup_adoption.h"
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+namespace tvterm { class TerminalController; }
 
 class AgentVisionApp final : public TApplication {
     std::shared_ptr<agentvision::CoreConnection> connection;
@@ -18,6 +21,18 @@ class AgentVisionApp final : public TApplication {
     agentvision::StartupAdoption startupAdoption;
     bool cleanupRequested {false}, cleanupAcknowledged {false};
     bool suspended {false}, stopped {false}, cleanupTargetMiss {false};
+    bool admissionClosed {false}, servicingCoreEvents {false};
+    uint64_t nextViewId {2};
+    struct PendingCreate { TRect bounds; std::string label; };
+    struct PreparedCreate {
+        TRect bounds;
+        std::string label;
+        std::shared_ptr<agentvision::SessionEndpoint> endpoint;
+        tvterm::TerminalController *controller;
+    };
+    std::map<agentvision::RequestId, PendingCreate> pendingCreates;
+    std::vector<PreparedCreate> preparedCreates;
+    std::string creationFailure;
     std::string startupFailure, cleanupFailure;
     void openMenu();
     bool addTerminal(const TRect &, char label);
@@ -28,6 +43,11 @@ class AgentVisionApp final : public TApplication {
     void serviceCleanup();
     void stopPresentations();
     void acknowledgeCleanup();
+    void newTerminal();
+    void serviceCoreEvents();
+    void adoptPrepared();
+    void clearCreates();
+    bool mayInsertTerminal();
 public:
     bool ready {false};
     AgentVisionApp();

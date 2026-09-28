@@ -16,6 +16,7 @@ audit = Path(os.environ['AV_DESKTOP_AUDIT'])
 seen = []
 created = 0
 held_close = None
+held_create = None
 control = Path(os.environ.get('AV_DESKTOP_CONTROL', str(audit)+'.control'))
 released_close_count = 0
 
@@ -53,6 +54,17 @@ try:
             action = control.read_text().strip()
             control.unlink()
             if action == 'lose': break
+            if action in ('created', 'error'):
+                assert held_create is not None
+                create_request, create_body = held_create
+                held_create = None
+                if action == 'error':
+                    send(12, create_request, body=struct.pack('>HIH', 6, 0, 0))
+                else:
+                    created += 1
+                    send(4, create_request, created, create_body)
+                    send(9, session=created, body=struct.pack('>Q', 1)+b'DYNAMIC_READY\r\n')
+                save()
             if action == 'closed':
                 assert held_close is not None
                 close_request, close_session = held_close
@@ -66,6 +78,10 @@ try:
         if not readable: continue
         kind, request, session, body = read()
         if kind == 3:
+            if mode == 'dynamic-held' and created >= 2:
+                assert held_create is None
+                held_create = (request, body)
+                continue
             if mode == 'crash-before-created': break
             if mode == 'second-create-error' and created == 1:
                 send(12, request, body=struct.pack('>HIH', 6, 0, 0))
@@ -93,11 +109,19 @@ try:
         elif kind == 14:
             send(13, request, session, struct.pack('>H', 14))
         elif kind == 7:
+            if mode == 'dynamic-held':
+                send(11, request, session, struct.pack('>Q', 1 if session == 2 or session >= 3 else 0))
+                continue
             assert session == 2 and held_close is None
             if mode not in ('close-drag', 'close-grab', 'close-mouse'):
                 send(10, session=2, body=struct.pack('>BIBQB', 1, 7, 0, 1, 7))
             held_close = (request, session)
         elif kind == 8:
+            if mode == 'dynamic-held' and held_create is not None:
+                create_request, create_body = held_create
+                created += 1
+                send(4, create_request, created, create_body)
+                save()
             send(13, request, body=struct.pack('>H', 8))
             break
         else: raise AssertionError('unexpected desktop request')
