@@ -25,6 +25,10 @@ public:
     static std::string formatCaption(const std::string &, const agentvision::SessionMetadata &,
                                      bool closing = false, bool resizeFailed = false,
                                      bool authorityLost = false, size_t maxCells = 0);
+    static std::string listCaptionFor(const std::string &id, const std::string &title,
+                                     const agentvision::SessionMetadata &, bool closing = false,
+                                     bool resizeFailed = false, bool authorityLost = false,
+                                     size_t maxCells = 31);
     static std::string captionFor(char label, const agentvision::SessionMetadata &metadata,
                                   bool closing = false, bool resizeFailed = false,
                                   bool authorityLost = false, size_t maxCells = 0) {
@@ -35,6 +39,7 @@ public:
     const std::string &viewId() const noexcept { return label; }
     const std::string &title() const noexcept { return displayTitle; }
     std::string displayCaption(size_t maxCells = 0) const;
+    std::string listCaption(size_t maxCells = 31) const;
     static std::string labelFor(uint64_t localId);
     bool ownsSession(agentvision::SessionId id) const noexcept;
     bool isLive() const noexcept;

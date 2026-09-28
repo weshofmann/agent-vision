@@ -173,8 +173,8 @@ std::vector<WindowListRow> AgentVisionApp::windowRows()
         auto *terminal = dynamic_cast<TerminalWindow *>(view);
         auto &items = *static_cast<std::vector<WindowListRow> *>(context);
         if (terminal && items.size() < 16)
-            items.push_back({terminal->viewId(), terminal->viewId() + " " +
-                             terminal->displayCaption(30)});
+            // TListViewer consumes one of the 32 listbox cells at the left.
+            items.push_back({terminal->viewId(), terminal->listCaption(31)});
     }, &rows);
     return rows;
 }

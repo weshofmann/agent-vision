@@ -500,7 +500,9 @@ def synthetic_desktop(binary, folder, mode):
             before = json.loads(audit.read_text())['requests']
             control.write_text('lose')
             d.wait(lambda: d.raw.count(b'\x1b[?1049h') >= 2, 'known-exit loss did not restore/resume')
-            assert d.contains('Terminal B [exited 7]'), 'contact loss replaced authoritative exit result'
+            d.wait(lambda: d.contains('Terminal A [backend lost]') and
+                              d.contains('Terminal B [exited 7] [backend lost]'),
+                   'connection-wide loss did not redraw live and known-exit frame captions')
             d.menu('w')
             d.wait(lambda: not d.contains('Terminal B ['), 'known exited/pending Close window could not dismiss after loss')
             assert json.loads(audit.read_text())['requests'] == before, 'lost window attempted a backend request'
@@ -952,11 +954,43 @@ def controls_minimum(binary, folder):
         return {'minimum_40x14_controls': True, 'list_shows_dynamic_view': True, **restored}
     finally: d.close()
 
+def controls_long_status(binary, folder):
+    d = Desktop(binary, folder, columns=40, rows=14)
+    try:
+        d.wait(lambda: d.contains('B [live]'), 'minimum B frame did not retain its identity')
+        d.menu('e')
+        d.wait(lambda: d.contains('Rename terminal'), 'minimum Rename dialog missing')
+        d.send('\x7f'*10 + 'x'*48 + '\r')
+        d.wait(lambda: not d.contains('Rename terminal'), 'long title Rename did not finish')
+        def row_with(state):
+            return next((row for row in d.screen.display
+                         if 'B xxxx' in row and state in row), None)
+        d.menu('l')
+        d.wait(lambda: row_with('[live]') is not None,
+               'long valid title obscured live state in minimum Window List')
+        d.snapshot('long-live-list')
+        d.send('\x1b')
+        d.wait(lambda: not d.contains('Window List'), 'Window List did not dismiss')
+        d.command('exit 7')
+        d.wait(lambda: d.contains('[exited 7]'), 'B known exit did not reach the narrow frame')
+        d.menu('l')
+        d.wait(lambda: row_with('[exited 7]') is not None,
+               'long title obscured exact exit in minimum Window List')
+        d.snapshot('long-exited-list')
+        d.send('\x1b')
+        d.wait(lambda: not d.contains('Window List'), 'exited Window List did not dismiss')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 1 live'), 'Quit count included exited B')
+        d.confirm(True)
+        restored = d.restore()
+        return {'minimum_long_title_live_and_exit_rows': True, **restored}
+    finally: d.close()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'controls-minimum', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'controls-minimum', 'controls-long-status', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
@@ -967,7 +1001,7 @@ if __name__ == '__main__':
              'dynamic-unrelated-close-modal': dynamic_unrelated_close_modal,
              'dynamic-capacity': dynamic_capacity,
              'dynamic-cycles': dynamic_cycles, 'dynamic-pending-quit': dynamic_pending_quit,
-             'controls-minimum': controls_minimum,
+             'controls-minimum': controls_minimum, 'controls-long-status': controls_long_status,
              'loss-modal': loss_modal,
              'loss-continuous': loss_continuous, 'stopped-quit': stopped_quit,
              'startup-before': startup_before, 'startup-after': startup_after,

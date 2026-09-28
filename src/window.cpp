@@ -115,20 +115,22 @@ std::string TerminalWindow::formatCaption(const std::string &title, const Sessio
     if (resizeFailed) state += " [resize failed]";
     if (!maxCells) return title + " " + state;
     if (TText::width(state.c_str()) > maxCells) {
-        // A narrow frame cannot carry tail/resize annotations. Preserve the
-        // authoritative completion and the later contact-loss fact first.
-        if (lost && metadata.state == SessionState::Exited) {
+        // The primary lifecycle result takes precedence over tail and resize
+        // annotations when the frame or list row is too narrow for all facts.
+        if (metadata.state == SessionState::Exited) {
             if (metadata.status.kind == ExitKind::Exit)
-                state = "[exit " + std::to_string(metadata.status.value) + " lost]";
+                state = "[exit " + std::to_string(metadata.status.value);
             else if (metadata.status.kind == ExitKind::Signal)
-                state = "[sig " + std::to_string(metadata.status.value) + " lost]";
+                state = "[sig " + std::to_string(metadata.status.value);
             else
-                state = "[status? lost]";
+                state = "[status?";
+            if (lost) state += " lost";
+            state += "]";
         } else if (lost && metadata.state == SessionState::Closed)
             state = "[closed lost]";
     }
     const size_t stateWidth = TText::width(state.c_str());
-    if (stateWidth >= maxCells) return state;
+    if (stateWidth >= maxCells) return state.substr(0, maxCells);
     const size_t titleLimit = maxCells - stateWidth - 1;
     size_t offset = 0, width = 0;
     while (offset < title.size()) {
@@ -147,6 +149,23 @@ std::string TerminalWindow::displayCaption(size_t maxCells) const
                           resizeFailed, authorityLost, maxCells);
     return formatCaption(displayTitle, endpoint->metadata(), closing != 0,
                       resizeFailed, authorityLost, maxCells);
+}
+std::string TerminalWindow::listCaptionFor(const std::string &id, const std::string &title,
+                                           const SessionMetadata &metadata, bool closing,
+                                           bool resizeFailed, bool lost, size_t maxCells)
+{
+    const std::string prefix = id + " "; // View IDs are local ASCII labels.
+    if (prefix.size() >= maxCells) return prefix.substr(0, maxCells);
+    const size_t captionCells = maxCells - prefix.size();
+    const std::string content = title == "Terminal " + id ?
+        captionFor(id, metadata, closing, resizeFailed, lost, captionCells) :
+        formatCaption(title, metadata, closing, resizeFailed, lost, captionCells);
+    return prefix + content;
+}
+std::string TerminalWindow::listCaption(size_t maxCells) const
+{
+    return listCaptionFor(label, displayTitle, endpoint->metadata(), closing != 0,
+                          resizeFailed, authorityLost, maxCells);
 }
 const char *TerminalWindow::getTitle(short maxCells)
 {
@@ -172,8 +191,11 @@ void TerminalWindow::handleEvent(TEvent &event)
                     resizeFailed = true;
                 if (core.kind == ConnectionEvent::Kind::RequestError && core.request == closing)
                     closing = 0;
-                if (frame) frame->drawView();
             }
+            // Lost is connection-wide and normally carries session 0.
+            if ((core.kind == ConnectionEvent::Kind::Lost ||
+                 core.session == endpoint->metadata().id) && frame)
+                frame->drawView();
         }
         if (event.message.command == cmCheckTerminalUpdates) {
             auto state = endpoint->metadata().state;

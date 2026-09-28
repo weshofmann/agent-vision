@@ -186,6 +186,21 @@ int captions() {
           narrowDefault.find('B') != std::string::npos &&
           narrowDefault.find("[live]") != std::string::npos,
           "narrow default frame retains immutable view label and truthful state");
+    m.state = SessionState::Exited;
+    m.status = {ExitKind::Signal, 15, true};
+    m.drainReason = DrainReason::ByteCap;
+    const auto boundedList = TerminalWindow::listCaptionFor(
+        "B", std::string(48, 'x'), m, false, true, true, 31);
+    check(TText::width(boundedList.c_str()) <= 31 && boundedList.rfind("B ", 0) == 0 &&
+          boundedList.find("sig 15") != std::string::npos &&
+          boundedList.find("lost") != std::string::npos,
+          "minimum list row retains identity, known signal, and later loss within visible cells");
+    const auto boundedState = TerminalWindow::formatCaption(
+        "Work", m, false, true, false, 29);
+    check(TText::width(boundedState.c_str()) <= 29 &&
+          boundedState.find("sig 15") != std::string::npos,
+          "long status annotations cannot overrun the list caption budget");
+    m.state = SessionState::Running;
     auto clipped = TerminalWindow::captionFor("\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C", m, false, false, false, 20);
     check(clipped.find("[live]") != std::string::npos && TText::width(clipped.c_str()) <= 20,
           "narrow frame reserves state and clips wide Unicode at a whole character");
