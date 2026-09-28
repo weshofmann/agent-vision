@@ -18,6 +18,7 @@ created = 0
 held_close = None
 control = Path(os.environ.get('AV_DESKTOP_CONTROL', str(audit)+'.control'))
 released_close_count = 0
+a_output_sequence = 0
 
 def save():
     audit.write_text(json.dumps({'requests': seen, 'created': created, 'released_close_count': released_close_count})+'\n')
@@ -85,7 +86,8 @@ try:
         elif kind == 5:
             send(13, request, session, struct.pack('>H', 5))
             if session == 1:
-                send(9, session=1, body=struct.pack('>Q', 1)+b'A_PROGRESS\r\n')
+                a_output_sequence += 1
+                send(9, session=1, body=struct.pack('>Q', a_output_sequence)+b'A_PROGRESS\r\n')
                 if held_close and mode == 'close-barrier':
                     close_request, close_session = held_close
                     send(11, close_request, close_session, struct.pack('>Q', 1))
