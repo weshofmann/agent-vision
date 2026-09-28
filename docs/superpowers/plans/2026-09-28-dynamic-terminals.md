@@ -4,7 +4,7 @@
 
 **Goal:** Let a user create and retire real local terminals without blocking the Turbo Vision desktop or changing the Go-core wire protocol.
 
-**Architecture:** The C++ application owns a bounded set of pending Create request IDs and stable presentation labels. The shared `CoreConnection` and Go core continue to own session and process state. `idle()` matches `Created`/`RequestError` to pending requests, adopts each accepted endpoint once on the UI thread, and closes an orphaned late `Created` session when connection authority still permits. The existing two-window startup remains unchanged.
+**Architecture:** The C++ application owns a bounded set of pending Create request IDs and stable presentation labels. The shared `CoreConnection` and Go core continue to own session and process state. A bounded core-event service called from `getEvent()` and `idle()` matches `Created`/`RequestError`, prepares accepted terminal controllers on the UI thread, and inserts windows only outside nested modal/drag operations when Turbo Vision also permits focus movement; it closes unadopted accepted sessions while connection authority remains. The existing two-window startup remains unchanged.
 
 **Tech Stack:** C++14, Turbo Vision/tvterm, existing AVCP v1 `CoreConnection`, Go-core session manager, CTest and the existing outer-PTY `desktop_pty.py` harness.
 
@@ -22,32 +22,34 @@
 ## Review focus
 
 - A delayed `Created` arriving after local shutdown must not create a window; a still-authoritative orphan must receive Close.
+- A delayed `Created` during continuous key/mouse input or a popup, confirmation, or drag must be serviced without relying on Turbo Vision's idle-only event path; defer window insertion without changing that UI operation's focus/modal ownership, while the prepared controller consumes output.
 - An `Error` or local admission failure must release pending UI state and report capacity/launch failure without freezing existing terminals.
 - Fast repeated New actions must not exceed the 16 active/Starting budget or accumulate unbounded retired views.
 - A Close request's acknowledgement must precede view retirement; close-last must leave Ctrl-B/New available.
-- Natural exit retains its exact status/output until explicit dismissal; a later New must not reuse the old view identity.
+- Natural exit retains its exact status/output until explicit dismissal; a later New must not reuse the old view identity. Pending-only Quit cancellation must preserve creation; confirmed Quit must close admission and tear down late results.
 
 ## Task 1: Pending creation and stable view identity
 
 **Files:** Modify `src/app.h`, `src/app.cpp`, `src/commands.h`, `src/window.h`, `src/window.cpp`; test through a focused C++ state test or the existing fake-core desktop seam.
 
-**Interfaces:** A `New Terminal` command reserves a monotonic local view ID and a bounded pending entry keyed by nonzero `RequestId`; `idle()` consumes matching `Created`/`RequestError`. The window label is a string derived from that local ID (`A`, `B`, then `C`…`Z`, then decimal) and never from a `SessionId` or PID.
+**Interfaces:** A `New Terminal` command reserves a monotonic local view ID and a bounded pending entry keyed by nonzero `RequestId`; `serviceCoreEvents()` is called from `getEvent()` and `idle()` with a finite per-call budget and a reentrancy guard. The window label is a string derived from that local ID (`A`, `B`, then `C`…`Z`, then decimal) and never from a `SessionId` or PID. Only local controller construction and window insertion occur under the existing `cleanupMutex`/`StartupAdoption` exclusion gate; `createSession`, `closeSession`, join, loss handling and message boxes remain outside it.
 
-- [ ] Write failing tests for distinct labels, pending cap, duplicate/unknown/late Created refusal, and Error cleanup.
+- [ ] Write failing tests for distinct labels, pending cap, duplicate/unknown/late Created refusal, Error cleanup, and delayed Created/Error during sustained inert input and nested modal UI.
 - [ ] Verify the tests fail for the missing New path.
-- [ ] Add menu command and nonblocking `createSession()` path. Keep startup's bounded `await()` only for initial A/B; never call it from New.
-- [ ] Adopt accepted endpoints on the UI thread through the existing tvterm `SessionTransport`; Close an unadopted accepted session if authority still exists. Clear pending on loss/shutdown.
+- [ ] Add menu command and nonblocking `createSession()` path. Keep startup's bounded `await()` only for initial A/B; never call it from New. Count visible/retained views plus pending/prepared creations under the local 16-view cap.
+- [ ] Service at most a fixed small number of core events per `getEvent()`/`idle()` call, including during continuous input. Prepare a controller on the UI thread so accepted output is consumed while a modal/drag operation is active. Insert its window only when `TopView() == this`, the current desktop view is not `sfDragging`, and `canMoveFocus()` permits; `canMoveFocus()` alone is not a modal guard in pinned Turbo Vision. Retain the controller until insertion or explicit cleanup.
+- [ ] Adopt accepted endpoints once under the cleanup gate. A duplicate for an already adopted session is ignored, not Closed; an unknown or late unadopted `Created` is Closed if authority remains; presentation-construction failure Closes that accepted session. On loss/shutdown, finish any prepared controller locally and clear pending state; a rejected Close relies on connection teardown, not an indefinite retry.
 - [ ] Run focused tests, inspect UI event/lock ordering, then commit a coherent checkpoint.
 
 ## Task 2: Bounded view retirement and failure behavior
 
 **Files:** Modify `src/app.cpp`, `src/window.cpp`, `src/window.h`; focused fake-core/PTY tests in `tests/`.
 
-**Interfaces:** A broadcast counts both live and retained terminal views for the local 16-view cap. Existing correlated Close and deferred `TWindow::close()` remain the retirement path. A failed Create displays a concise capacity or core-error reason, leaving other terminals usable.
+**Interfaces:** A broadcast counts both live and retained terminal views for the local 16-view cap. Existing correlated Close and deferred `TWindow::close()` remain the retirement path. A failed Create displays a concise capacity reason only when the local/Go limit is established; other zero `createSession()` results report admission unavailable without pretending the cause is capacity. Confirmed Quit closes New admission before shutdown, and its confirmation count includes pending/prepared Create requests; cancellation leaves them intact.
 
-- [ ] Write failing cases for cap, repeated create/close, confirmed versus canceled close, last-view dismissal, and create-after-last.
+- [ ] Write failing cases for cap, repeated create/close, confirmed versus canceled close, last-view dismissal, create-after-last, and pending-only Quit cancel/confirm with a late Created reply.
 - [ ] Verify the relevant failures before implementation.
-- [ ] Enforce the view/pending cap and terminal Close correlation without changing the existing session manager.
+- [ ] Enforce the view/pending cap and terminal Close correlation without changing the existing session manager. Confirmed Quit and local cleanup reject all later adoption.
 - [ ] Run focused C++/fixture tests and the default desktop smoke; commit the behavior checkpoint.
 
 ## Task 3: Real-core interaction and G2 qualification
