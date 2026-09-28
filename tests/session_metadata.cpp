@@ -181,6 +181,11 @@ int captions() {
           compact.find("lost") != std::string::npos,
           "narrow frame keeps both known exit and later loss visible");
     m.state = SessionState::Running;
+    const auto narrowDefault = TerminalWindow::captionFor('B', m, false, false, false, 14);
+    check(TText::width(narrowDefault.c_str()) <= 14 &&
+          narrowDefault.find('B') != std::string::npos &&
+          narrowDefault.find("[live]") != std::string::npos,
+          "narrow default frame retains immutable view label and truthful state");
     auto clipped = TerminalWindow::captionFor("\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C\xE7\x95\x8C", m, false, false, false, 20);
     check(clipped.find("[live]") != std::string::npos && TText::width(clipped.c_str()) <= 20,
           "narrow frame reserves state and clips wide Unicode at a whole character");

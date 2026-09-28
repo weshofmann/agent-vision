@@ -75,7 +75,11 @@ void TerminalWindow::finish()
 std::string TerminalWindow::captionFor(const std::string &label, const SessionMetadata &metadata,
                                       bool closing, bool resizeFailed, bool lost, size_t maxCells)
 {
-    return formatCaption("Terminal " + label, metadata, closing, resizeFailed, lost, maxCells);
+    const std::string defaultTitle = "Terminal " + label;
+    auto result = formatCaption(defaultTitle, metadata, closing, resizeFailed, lost, maxCells);
+    if (maxCells && result.rfind(defaultTitle + " ", 0) != 0)
+        return formatCaption(label, metadata, closing, resizeFailed, lost, maxCells);
+    return result;
 }
 std::string TerminalWindow::formatCaption(const std::string &title, const SessionMetadata &metadata,
                                       bool closing, bool resizeFailed, bool lost, size_t maxCells)
@@ -138,6 +142,9 @@ std::string TerminalWindow::formatCaption(const std::string &title, const Sessio
 }
 std::string TerminalWindow::displayCaption(size_t maxCells) const
 {
+    if (displayTitle == "Terminal " + label)
+        return captionFor(label, endpoint->metadata(), closing != 0,
+                          resizeFailed, authorityLost, maxCells);
     return formatCaption(displayTitle, endpoint->metadata(), closing != 0,
                       resizeFailed, authorityLost, maxCells);
 }
