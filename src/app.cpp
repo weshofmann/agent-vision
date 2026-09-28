@@ -566,7 +566,7 @@ public:
 };
 void AgentVisionApp::openMenu()
 {
-    TMenuItem &items =
+    TMenuItem &groups =
         (*new TSubMenu("~T~erminal", kbNoKey, hcMenu) +
             *new TMenuItem("~N~ew", cmNewTerminal, kbNoKey) +
             *new TMenuItem("~C~lose", cmClose, kbNoKey) +
@@ -582,7 +582,10 @@ void AgentVisionApp::openMenu()
             *new TMenuItem("~P~aste", cmPaste, kbNoKey)) +
         (*new TSubMenu("~I~nput", kbNoKey, hcMenu) +
             *new TMenuItem("~G~rab", cmGrabInput, kbNoKey) +
-            *new TMenuItem("~R~elease", cmReleaseInput, kbNoKey)) +
+            *new TMenuItem("~R~elease", cmReleaseInput, kbNoKey));
+    // Keep the static type TMenuItem here: TSubMenu + TMenuItem appends inside
+    // the last submenu, whereas TMenuItem + TMenuItem extends the top level.
+    TMenuItem &items = groups +
         *new TMenuItem("~H~elp", cmWorkbenchHelp, kbNoKey) +
         *new TMenuItem("~S~uspend", cmDosShell, kbNoKey) +
         *new TMenuItem("~Q~uit", cmQuit, kbNoKey);

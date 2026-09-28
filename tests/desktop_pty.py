@@ -920,14 +920,17 @@ def controls_minimum(binary, folder):
         d.wait(lambda: d.contains('Workbench Help') and d.contains('Tab to shell'),
                'minimum Help was clipped or unavailable')
         d.send('\r')
+        d.wait(lambda: not d.contains('Workbench Help'), 'Help did not dismiss')
         d.menu('l')
         d.wait(lambda: d.contains('Window List') and d.contains('Terminal A [live]') and
                           d.contains('Terminal B [live]'),
                'minimum Window List did not show both live states')
         d.send('\x1b')
+        d.wait(lambda: not d.contains('Window List'), 'Window List did not dismiss')
         d.menu('e')
         d.wait(lambda: d.contains('Rename terminal'), 'minimum Rename dialog unavailable')
         d.send('\x1b')
+        d.wait(lambda: not d.contains('Rename terminal'), 'Rename cancel did not dismiss')
         d.menu('\t'); d.menu('p')
         d.menu('r')
         d.wait(lambda: d.contains('Arrows') and d.contains('Move'),
