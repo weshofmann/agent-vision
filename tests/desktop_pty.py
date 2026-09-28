@@ -498,7 +498,9 @@ def synthetic_desktop(binary, folder, mode):
                 d.confirm(True)
             d.wait(lambda: d.contains('Terminal B [exited 7]'), 'known exit before loss missing')
             before = json.loads(audit.read_text())['requests']
-            control.write_text('lose')
+            pending_control = folder/'control.pending'
+            pending_control.write_text('lose')
+            os.replace(pending_control, control)
             d.wait(lambda: d.raw.count(b'\x1b[?1049h') >= 2, 'known-exit loss did not restore/resume')
             d.wait(lambda: d.contains('Terminal A [backend lost]') and
                               d.contains('Terminal B [exited 7] [backend lost]'),
