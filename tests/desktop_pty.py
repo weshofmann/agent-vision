@@ -128,7 +128,11 @@ class Desktop:
     def send(self, text):
         os.write(self.master, text.encode())
         self.drain(.08)
-    def command(self, text): self.send(text+'\r')
+    def command(self, text):
+        # Send typed text and the explicit Return separately. Turbo Vision may
+        # classify a burst of several text events, including Return, as paste.
+        self.send(text)
+        self.send('\r')
     def menu(self, key):
         self.send('\x02')
         self.wait(lambda: self.contains('Close Term'), 'Ctrl-B menu did not open')

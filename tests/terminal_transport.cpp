@@ -1,5 +1,6 @@
 // Real libvterm with a deterministic owned transport; no socket/emulator clone.
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <mutex>
 #include <queue>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <tvterm/termemu.h>
 #define private public
@@ -16,6 +18,7 @@
 #include AGENTVISION_TERMCTRL_SOURCE
 #include <tvterm/vtermemu.h>
 #define Uses_THardwareInfo
+#define Uses_TKeys
 #include <tvision/tv.h>
 using namespace tvterm;
 static void check(bool ok, const char *why) {
@@ -113,6 +116,24 @@ static void writerIteration(TerminalController *c) {
     auto pending = std::move(c->eventLoop.clientDataWriter.segments);
     c->eventLoop.writePendingData(pending, updated);
 }
+static std::vector<char> recordedBytes(const State &s) {
+    std::vector<char> bytes;
+    for (const auto &part : s.output) {
+        check(part.origin == InputOrigin::User, "paste remains user-origin input");
+        bytes.insert(bytes.end(), part.bytes.begin(), part.bytes.end());
+    }
+    return bytes;
+}
+static void sendKey(TerminalController *c, const char *text, size_t length, ushort flags = 0) {
+    TerminalEvent e;
+    e.type = TerminalEventType::KeyDown;
+    e.keyDown = {};
+    check(length <= sizeof(e.keyDown.text), "test key fits Turbo Vision text event");
+    std::copy(text, text + length, e.keyDown.text);
+    e.keyDown.textLength = static_cast<uchar>(length);
+    e.keyDown.controlKeyState = flags;
+    c->sendEvent(e);
+}
 class LifetimeEmulator final : public TerminalEmulator {
     TerminalEmulator &inner;
     Writer &writer;
@@ -152,6 +173,41 @@ class LifetimeFactory final : public TerminalEmulatorFactory {
 };
 static void run() {
     VTermEmulatorFactory f;
+    {
+        auto s = std::make_shared<State>();
+        auto *c = inert(f, s);
+        feed(c, "\033[?2004h", 8);
+        sendKey(c, "x", 1, kbPaste);
+        sendKey(c, "\n", 1, kbPaste);
+        sendKey(c, "\xc3\xa9", 2, kbPaste);
+        writerIteration(c);
+        const std::string wrapped = "\033[200~x\033[201~\033[200~\n\033[201~"
+                                    "\033[200~\xc3\xa9\033[201~";
+        check(recordedBytes(*s) == std::vector<char>(wrapped.begin(), wrapped.end()),
+              "inner bracketed paste preserves exact multiline UTF-8 text and delimiters");
+        s->output.clear();
+        feed(c, "\033[?2004l", 8);
+        sendKey(c, "\n", 1, kbPaste);
+        writerIteration(c);
+        check(recordedBytes(*s) == std::vector<char>({'\n'}),
+              "paste without inner mode emits literal bytes without delimiters");
+        s->output.clear();
+        TerminalEvent enter;
+        enter.type = TerminalEventType::KeyDown;
+        enter.keyDown = {};
+        enter.keyDown.keyCode = kbEnter;
+        c->sendEvent(enter);
+        writerIteration(c);
+        check(recordedBytes(*s) == std::vector<char>({'\r'}),
+              "ordinary Enter retains keyboard encoding");
+        s->output.clear();
+        feed(c, "\033[?2004h\033c", 10);
+        sendKey(c, "r", 1, kbPaste);
+        writerIteration(c);
+        check(recordedBytes(*s) == std::vector<char>({'r'}),
+              "emulator reset clears inner bracketed-paste mode");
+        c->shutDown();
+    }
     {
         auto s = std::make_shared<State>();
         LifetimeFactory factory(s);
@@ -208,6 +264,10 @@ static void run() {
         c->sendEvent(k);
         writerIteration(c);
         check(s->output.size() == before, "process input suppressed after disconnect");
+        k.keyDown.controlKeyState = kbPaste;
+        c->sendEvent(k);
+        writerIteration(c);
+        check(s->output.size() == before, "paste input suppressed after disconnect");
         c->shutDown();
     }
     {
@@ -267,6 +327,10 @@ static void run() {
         c->eventLoop.runReaderLoop();
         check(s->consumed == 5 && s->flushed && c->clientIsDisconnected(),
               "Closed input preserves final read/flush");
+        k.keyDown.controlKeyState = kbPaste;
+        c->sendEvent(k);
+        writerIteration(c);
+        check(s->output.size() == 1, "paste input suppressed after End");
         c->shutDown();
     }
     {
@@ -331,6 +395,14 @@ static void run() {
         check(c->lockState([](auto &st) { return st.surface.size == TPoint{55, 12}; }) &&
                   !s->flushed,
               "Lost retains local resize without fabricated Exited flush");
+        e.type = TerminalEventType::KeyDown;
+        e.keyDown = {};
+        e.keyDown.text[0] = 'p';
+        e.keyDown.textLength = 1;
+        e.keyDown.controlKeyState = kbPaste;
+        c->sendEvent(e);
+        writerIteration(c);
+        check(s->output.empty(), "paste input suppressed after Lost");
         c->shutDown();
     }
     {
