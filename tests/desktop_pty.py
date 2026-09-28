@@ -960,7 +960,8 @@ def controls_long_status(binary, folder):
         d.wait(lambda: d.contains('B [live]'), 'minimum B frame did not retain its identity')
         d.menu('e')
         d.wait(lambda: d.contains('Rename terminal'), 'minimum Rename dialog missing')
-        d.send('\x7f'*10 + 'x'*48 + '\r')
+        d.send('\x7f'*10 + 'x'*48)
+        d.send('\r')
         d.wait(lambda: not d.contains('Rename terminal'), 'long title Rename did not finish')
         def row_with(state):
             return next((row for row in d.screen.display
