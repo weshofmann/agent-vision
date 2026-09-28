@@ -717,6 +717,86 @@ def dynamic_drag(binary, folder):
                 'drag_movement_preserved': True, **restored}
     finally: d.close()
 
+def dynamic_error_modal(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'dynamic-held', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('n'); d.menu('n')
+        d.wait(lambda: sum(row['type'] == 3 for row in json.loads(audit.read_text())['requests']) == 4,
+               'two pending Create requests were not sent')
+        control.write_text('error')
+        d.wait(lambda: d.contains('Cannot launch terminal shell'),
+               'first Create Error did not open dialog')
+        control.write_text('created')
+        for _ in range(20): d.send('x')
+        d.wait(lambda: any(row['type'] == 14 and row['session'] == 3
+                           for row in json.loads(audit.read_text())['requests']),
+               'second Created was not serviced inside Create-error dialog')
+        assert d.contains('Cannot launch terminal shell') and not d.contains('Terminal D ['), \
+            'second Created stole error-dialog focus'
+        d.send('\r')
+        d.wait(lambda: d.contains('Terminal D [live]') and d.contains('DYNAMIC_READY'),
+               'prepared D did not insert after error dialog')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 3 live'), 'Quit count after Error wrong')
+        d.confirm(True)
+        restored = d.restore()
+        return {'error_dialog_keeps_event_service': True,
+                'prepared_adoption_after_dialog': True, **restored}
+    finally: d.close()
+
+def dynamic_unrelated_close_modal(binary, folder):
+    package = folder/'package'
+    package.mkdir(parents=True, exist_ok=True)
+    frontend = package/'agentvision'
+    shutil.copy2(binary, frontend)
+    shutil.copy2(Path(__file__).with_name('desktop_core_fixture.py'), package/'agentvision-core')
+    (package/'agentvision-core').chmod(0o700)
+    audit, control = folder/'audit.json', folder/'control'
+    d = Desktop(frontend.resolve(), folder/'outer', extra_env={
+        'AV_DESKTOP_CASE': 'close-drag', 'AV_DESKTOP_AUDIT': str(audit.resolve()),
+        'AV_DESKTOP_CONTROL': str(control.resolve())})
+    try:
+        d.wait(lambda: d.contains('Terminal A [live]') and d.contains('Terminal B [live]'),
+               'synthetic initial pair missing')
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal B'), 'B close confirmation missing')
+        d.confirm(True)
+        d.wait(lambda: d.contains('Terminal B [closing]'), 'B Close was not held')
+        d.menu('\t')
+        d.menu('w')
+        d.wait(lambda: d.contains('Terminate live terminal A'), 'A modal did not open')
+        control.write_text('closed')
+        for _ in range(12): d.send('x')
+        d.wait(lambda: json.loads(audit.read_text())['released_close_count'] == 1,
+               'B Closed was not released')
+        assert d.contains('Terminate live terminal A'), 'B Closed disturbed A confirmation'
+        d.confirm(False)
+        d.wait(lambda: not d.contains('Terminal B ['), 'B did not retire after A modal')
+        assert d.contains('Terminal A [live]'), 'A was lost after canceling confirmation'
+        d.command('progress')
+        d.wait(lambda: d.contains('A_PROGRESS'), 'A survivor stopped handling input')
+        d.menu('q')
+        d.wait(lambda: d.contains('Terminate 1 live'), 'survivor Quit count wrong')
+        d.confirm(True)
+        restored = d.restore()
+        record = json.loads(audit.read_text())
+        assert sum(row['type'] == 7 for row in record['requests']) == 1, \
+            'B Close was issued more than once'
+        return {'unrelated_modal_survives_close': True,
+                'single_retirement': True, 'survivor_input': True, **restored}
+    finally: d.close()
+
 def dynamic_capacity(binary, folder):
     d = Desktop(binary, folder)
     try:
@@ -817,13 +897,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('.probe/desktop'))
-    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
+    parser.add_argument('--cases', nargs='+', choices=['interaction', 'live-close-quit', 'quit-both', 'scrolling', 'dynamic-basic', 'dynamic-four-shells', 'dynamic-modal', 'dynamic-drag', 'dynamic-error-modal', 'dynamic-unrelated-close-modal', 'dynamic-capacity', 'dynamic-cycles', 'dynamic-pending-quit', 'loss-modal', 'loss-continuous', 'stopped-quit', 'startup-before', 'startup-after', 'startup-second', 'close-barrier', 'exit-then-loss', 'close-drag', 'close-grab', 'close-mouse', 'startup-final'])
     args = parser.parse_args()
     assert args.binary.is_file(), 'AgentVision executable is not implemented'
     cases = {'interaction': interaction, 'live-close-quit': live_close_quit,
              'quit-both': quit_both, 'scrolling': scrolling, 'dynamic-basic': dynamic_basic,
              'dynamic-four-shells': dynamic_four_shells,
              'dynamic-modal': dynamic_modal, 'dynamic-drag': dynamic_drag,
+             'dynamic-error-modal': dynamic_error_modal,
+             'dynamic-unrelated-close-modal': dynamic_unrelated_close_modal,
              'dynamic-capacity': dynamic_capacity,
              'dynamic-cycles': dynamic_cycles, 'dynamic-pending-quit': dynamic_pending_quit,
              'loss-modal': loss_modal,

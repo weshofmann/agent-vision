@@ -193,64 +193,66 @@ void AgentVisionApp::serviceCoreEvents()
 {
     if (servicingCoreEvents || !connection) return;
     servicingCoreEvents = true;
-    struct Guard { bool &flag; ~Guard() { flag = false; } } guard{servicingCoreEvents};
-    agentvision::ConnectionEvent event;
-    for (unsigned i = 0; i < 4 && connection->pollEvent(event); ++i) {
-        if (event.kind == agentvision::ConnectionEvent::Kind::Created) {
-            auto pending = pendingCreates.find(event.request);
-            if (pending == pendingCreates.end()) {
-                TerminalSessionQuery query{event.session, false};
-                message(this, evBroadcast, cmFindSession, &query);
-                bool prepared = false;
-                for (const auto &item : preparedCreates)
-                    prepared |= item.endpoint->metadata().id == event.session;
-                if (!query.found && !prepared)
-                    connection->closeSession(event.session);
-            } else {
-                auto item = std::move(pending->second);
-                pendingCreates.erase(pending);
-                auto endpoint = connection->endpoint(event.session);
-                bool allowed;
-                {
-                    std::lock_guard<std::mutex> gate(cleanupMutex);
-                    allowed = startupAdoption.mayAdopt() && !admissionClosed && !stopped;
-                    if (allowed && endpoint) {
-                        auto size = TerminalWindow::viewSize(item.bounds);
-                        tvterm::VTermEmulatorFactory factory;
-                        auto transport = std::unique_ptr<tvterm::SessionTransport>(
-                            new agentvision::IpcSessionTransport(connection, endpoint));
-                        auto *controller = tvterm::TerminalController::createWithTransport(
-                            size, factory, std::move(transport));
-                        if (controller)
-                            preparedCreates.push_back({item.bounds, std::move(item.label),
-                                                       endpoint, controller});
-                        else
-                            allowed = false;
+    {
+        struct Guard { bool &flag; ~Guard() { flag = false; } } guard{servicingCoreEvents};
+        agentvision::ConnectionEvent event;
+        for (unsigned i = 0; i < 4 && connection->pollEvent(event); ++i) {
+            if (event.kind == agentvision::ConnectionEvent::Kind::Created) {
+                auto pending = pendingCreates.find(event.request);
+                if (pending == pendingCreates.end()) {
+                    TerminalSessionQuery query{event.session, false};
+                    message(this, evBroadcast, cmFindSession, &query);
+                    bool prepared = false;
+                    for (const auto &item : preparedCreates)
+                        prepared |= item.endpoint->metadata().id == event.session;
+                    if (!query.found && !prepared)
+                        connection->closeSession(event.session);
+                } else {
+                    auto item = std::move(pending->second);
+                    pendingCreates.erase(pending);
+                    auto endpoint = connection->endpoint(event.session);
+                    bool allowed;
+                    {
+                        std::lock_guard<std::mutex> gate(cleanupMutex);
+                        allowed = startupAdoption.mayAdopt() && !admissionClosed && !stopped;
+                        if (allowed && endpoint) {
+                            auto size = TerminalWindow::viewSize(item.bounds);
+                            tvterm::VTermEmulatorFactory factory;
+                            auto transport = std::unique_ptr<tvterm::SessionTransport>(
+                                new agentvision::IpcSessionTransport(connection, endpoint));
+                            auto *controller = tvterm::TerminalController::createWithTransport(
+                                size, factory, std::move(transport));
+                            if (controller)
+                                preparedCreates.push_back({item.bounds, std::move(item.label),
+                                                           endpoint, controller});
+                            else
+                                allowed = false;
+                        }
+                    }
+                    if (!allowed || !endpoint) {
+                        connection->closeSession(event.session);
+                        if (allowed && !endpoint)
+                            creationFailure = "Terminal presentation is unavailable.";
+                        else if (!allowed && endpoint && !admissionClosed && !stopped)
+                            creationFailure = "Terminal presentation is unavailable.";
                     }
                 }
-                if (!allowed || !endpoint) {
-                    connection->closeSession(event.session);
-                    if (allowed && !endpoint)
-                        creationFailure = "Terminal presentation is unavailable.";
-                    else if (!allowed && endpoint && !admissionClosed && !stopped)
-                        creationFailure = "Terminal presentation is unavailable.";
+            } else if (event.kind == agentvision::ConnectionEvent::Kind::RequestError) {
+                auto pending = pendingCreates.find(event.request);
+                if (pending != pendingCreates.end()) {
+                    pendingCreates.erase(pending);
+                    creationFailure = event.errorCode == 5 ? "Terminal capacity is 16 sessions." :
+                        event.errorCode == 6 ? "Cannot launch terminal shell." :
+                        "Terminal creation failed.";
                 }
+            } else if (event.kind == agentvision::ConnectionEvent::Kind::Lost) {
+                clearCreates();
             }
-        } else if (event.kind == agentvision::ConnectionEvent::Kind::RequestError) {
-            auto pending = pendingCreates.find(event.request);
-            if (pending != pendingCreates.end()) {
-                pendingCreates.erase(pending);
-                creationFailure = event.errorCode == 5 ? "Terminal capacity is 16 sessions." :
-                    event.errorCode == 6 ? "Cannot launch terminal shell." :
-                    "Terminal creation failed.";
-            }
-        } else if (event.kind == agentvision::ConnectionEvent::Kind::Lost) {
-            clearCreates();
+            message(this, evBroadcast, cmCoreEvent, &event);
         }
-        message(this, evBroadcast, cmCoreEvent, &event);
+        adoptPrepared();
+        message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
     }
-    adoptPrepared();
-    message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
     if (!creationFailure.empty() && TopView() == this && mayInsertTerminal()) {
         auto failure = std::move(creationFailure);
         creationFailure.clear();
