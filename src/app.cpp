@@ -19,8 +19,16 @@
 #define Uses_TEvent
 #define Uses_MsgBox
 #define Uses_TEventQueue
+#define Uses_TDialog
+#define Uses_TListBox
+#define Uses_TScrollBar
+#define Uses_TButton
+#define Uses_TStaticText
+#define Uses_TText
 #include <tvision/tv.h>
 #include <tvterm/vtermemu.h>
+#include <algorithm>
+#include <cstring>
 
 AgentVisionApp::AgentVisionApp() :
     TProgInit(&initStatusLine, nullptr, &initDeskTop)
@@ -147,6 +155,129 @@ void AgentVisionApp::newTerminal()
         }
     }
     // A late Created has no pending owner and is closed by serviceCoreEvents if still authoritative.
+}
+TerminalWindow *AgentVisionApp::findWindow(const std::string &id)
+{
+    if (!deskTop || id.empty()) return nullptr;
+    auto *view = deskTop->firstThat([](TView *candidate, void *context) -> Boolean {
+        auto *terminal = dynamic_cast<TerminalWindow *>(candidate);
+        return terminal && terminal->viewId() == *static_cast<const std::string *>(context);
+    }, const_cast<std::string *>(&id));
+    return static_cast<TerminalWindow *>(view);
+}
+std::vector<WindowListRow> AgentVisionApp::windowRows()
+{
+    std::vector<WindowListRow> rows;
+    if (!deskTop) return rows;
+    deskTop->forEach([](TView *view, void *context) {
+        auto *terminal = dynamic_cast<TerminalWindow *>(view);
+        auto &items = *static_cast<std::vector<WindowListRow> *>(context);
+        if (terminal && items.size() < 16)
+            // TListViewer consumes one of the 32 listbox cells at the left.
+            items.push_back({terminal->viewId(), terminal->listCaption(31)});
+    }, &rows);
+    return rows;
+}
+void AgentVisionApp::renameTerminal()
+{
+    auto *selected = dynamic_cast<TerminalWindow *>(deskTop ? deskTop->current : nullptr);
+    if (!selected) return;
+    const std::string id = selected->viewId();
+    char value[49] {};
+    std::strncpy(value, selected->title().c_str(), sizeof(value) - 1);
+    TRect bounds(0, 0, 38, 8);
+    bounds.move((size.x - 38) / 2, (size.y - 8) / 2);
+    if (inputBoxRect(bounds, "Rename terminal", "Title", value, sizeof(value)) != cmOK)
+        return;
+    if (!TerminalWindow::validDisplayTitle(value)) {
+        messageBox("Title must be at most 48 UTF-8 bytes, without control characters.",
+                   mfError | mfOKButton);
+        return;
+    }
+    // Nested modal service can retire this view. Resolve the immutable ID anew.
+    if (auto *target = findWindow(id)) target->setDisplayTitle(value);
+}
+class WindowListBox final : public TListBox {
+    WindowListModel &model;
+public:
+    WindowListBox(const TRect &bounds, TScrollBar *scroll, WindowListModel &model) :
+        TListBox(bounds, 1, scroll), model(model) {}
+    void getText(char *dest, short item, short maxLen) override {
+        if (item < 0 || size_t(item) >= model.size()) { *dest = '\0'; return; }
+        std::strncpy(dest, model.rows()[item].caption.c_str(), maxLen);
+        dest[maxLen] = '\0';
+    }
+    void refresh(std::vector<WindowListRow> rows) {
+        model.select(size_t(focused));
+        const auto &old = model.rows();
+        if (old.size() == rows.size() &&
+            std::equal(old.begin(), old.end(), rows.begin(),
+                       [](const WindowListRow &a, const WindowListRow &b) {
+                           return a.id == b.id && a.caption == b.caption;
+                       })) return;
+        model.replace(std::move(rows));
+        setRange(short(model.size()));
+        if (model.size()) focusItem(short(model.selectedIndex()));
+        drawView();
+    }
+};
+class WindowListDialog final : public TDialog {
+    AgentVisionApp &app;
+    WindowListModel model;
+    WindowListBox *list;
+public:
+    explicit WindowListDialog(AgentVisionApp &app) :
+        TWindowInit(&TDialog::initFrame),
+        TDialog(TRect(0, 0, 38, 12), "Window List"), app(app) {
+        options |= ofCentered;
+        auto *scroll = new TScrollBar(TRect(34, 1, 35, 9));
+        insert(scroll);
+        list = new WindowListBox(TRect(2, 1, 34, 9), scroll, model);
+        insert(list);
+        insert(new TButton(TRect(7, 9, 17, 11), "~S~witch", cmOK, bfDefault));
+        insert(new TButton(TRect(20, 9, 30, 11), "Cancel", cmCancel, bfNormal));
+        refresh();
+        list->select();
+    }
+    void refresh() { list->refresh(app.windowRows()); }
+    std::string chosenId() {
+        model.select(size_t(list->focused));
+        return model.selectedId();
+    }
+    void handleEvent(TEvent &event) override {
+        const bool update = event.what == evBroadcast &&
+            (event.message.command == cmCoreEvent ||
+             event.message.command == cmCheckTerminalUpdates ||
+             event.message.command == cmTerminalUpdated);
+        TDialog::handleEvent(event);
+        if (update) refresh();
+    }
+};
+void AgentVisionApp::openWindowList()
+{
+    auto *dialog = new WindowListDialog(*this);
+    const auto result = execView(dialog);
+    const std::string id = result == cmOK ? dialog->chosenId() : std::string();
+    TObject::destroy(dialog);
+    if (auto *target = findWindow(id)) target->select();
+}
+void AgentVisionApp::showWorkbenchHelp()
+{
+    auto *dialog = new TDialog(TRect(0, 0, 38, 13), "Workbench Help");
+    dialog->options |= ofCentered;
+    dialog->insert(new TStaticText(TRect(2, 1, 36, 10),
+        "Ctrl-B opens all controls.\n"
+        "Terminal: New, Close, Rename.\n"
+        "Windows: List, Next, Previous.\n"
+        "Move/Resize, Maximize/Restore.\n"
+        "Text: Select, Paste.\n"
+        "Wheel/scrollbar scroll.\n"
+        "Input: Grab, Release.\n"
+        "Alt-End releases; Tab to shell.\n"
+        "Suspend/Quit: top menu."));
+    dialog->insert(new TButton(TRect(14, 10, 24, 12), "OK", cmOK, bfDefault));
+    execView(dialog);
+    TObject::destroy(dialog);
 }
 bool AgentVisionApp::mayInsertTerminal()
 {
@@ -395,6 +526,15 @@ void AgentVisionApp::handleEvent(TEvent &event)
     } else if (event.what == evCommand && event.message.command == cmNewTerminal) {
         newTerminal();
         clearEvent(event);
+    } else if (event.what == evCommand && event.message.command == cmRenameTerminal) {
+        renameTerminal();
+        clearEvent(event);
+    } else if (event.what == evCommand && event.message.command == cmWindowList) {
+        openWindowList();
+        clearEvent(event);
+    } else if (event.what == evCommand && event.message.command == cmWorkbenchHelp) {
+        showWorkbenchHelp();
+        clearEvent(event);
     }
 }
 Boolean AgentVisionApp::valid(ushort command)
@@ -426,19 +566,29 @@ public:
 };
 void AgentVisionApp::openMenu()
 {
-    TMenuItem &items =
-        *new TMenuItem("New Term", cmNewTerminal, 'N', hcNoContext, "~N~") +
-        *new TMenuItem("Close Term", cmClose, 'W', hcNoContext, "~W~") + newLine() +
-        *new TMenuItem("Next Term", cmNext, kbTab, hcNoContext, "~Tab~") +
-        *new TMenuItem("Previous Term", cmPrev, kbShiftTab, hcNoContext, "~Shift-Tab~") +
-        *new TMenuItem("Resize/Move", cmResize, 'R', hcNoContext, "~R~") +
-        *new TMenuItem("Maximize/Restore", cmZoom, 'F', hcNoContext, "~F~") + newLine() +
-        *new TMenuItem("Select Text", cmStartSelection, 'S', hcNoContext, "~S~") +
-        *new TMenuItem("Paste", cmPaste, 'P', hcNoContext, "~P~") + newLine() +
-        (*new TSubMenu("~M~ore...", kbNoKey, hcMenu) +
-            *new TMenuItem("~G~rab Input", cmGrabInput, kbNoKey)) +
-        *new TMenuItem("Suspend", cmDosShell, 'U', hcNoContext, "~U~") +
-        *new TMenuItem("Exit", cmQuit, 'Q', hcNoContext, "~Q~");
+    TMenuItem &groups =
+        (*new TSubMenu("~T~erminal", kbNoKey, hcMenu) +
+            *new TMenuItem("~N~ew", cmNewTerminal, kbNoKey) +
+            *new TMenuItem("~C~lose", cmClose, kbNoKey) +
+            *new TMenuItem("~R~ename", cmRenameTerminal, kbNoKey)) +
+        (*new TSubMenu("~W~indows", kbNoKey, hcMenu) +
+            *new TMenuItem("~L~ist", cmWindowList, kbNoKey) +
+            *new TMenuItem("~N~ext", cmNext, kbNoKey) +
+            *new TMenuItem("~P~revious", cmPrev, kbNoKey) +
+            *new TMenuItem("~M~ove/Resize", cmResize, kbNoKey) +
+            *new TMenuItem("Maximi~z~e/Restore", cmZoom, kbNoKey)) +
+        (*new TSubMenu("Te~x~t", kbNoKey, hcMenu) +
+            *new TMenuItem("~S~elect", cmStartSelection, kbNoKey) +
+            *new TMenuItem("~P~aste", cmPaste, kbNoKey)) +
+        (*new TSubMenu("~I~nput", kbNoKey, hcMenu) +
+            *new TMenuItem("~G~rab", cmGrabInput, kbNoKey) +
+            *new TMenuItem("~R~elease", cmReleaseInput, kbNoKey));
+    // Keep the static type TMenuItem here: TSubMenu + TMenuItem appends inside
+    // the last submenu, whereas TMenuItem + TMenuItem extends the top level.
+    TMenuItem &items = groups +
+        *new TMenuItem("~H~elp", cmWorkbenchHelp, kbNoKey) +
+        *new TMenuItem("~S~uspend", cmDosShell, kbNoKey) +
+        *new TMenuItem("~Q~uit", cmQuit, kbNoKey);
     auto *popup = new CenteredMenu(new TMenu(items));
     if (ushort command = execView(popup)) {
         TEvent event {};
