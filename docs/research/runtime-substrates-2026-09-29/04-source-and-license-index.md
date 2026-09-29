@@ -19,6 +19,23 @@
 
 This is an engineering summary, not legal advice. Any actual vendoring, linking, redistribution, or binary packaging should produce a dependency-specific bill of materials and notice review.
 
+### Source snapshot commits
+
+The following branch heads were recorded on the research date so claims based on
+fast-moving repository documentation can be reproduced even after the named
+branches advance. Release-tag links above remain the stable baselines.
+
+| Project | Inspected repository snapshot |
+| --- | --- |
+| tmux | [`ffbbdcc8529e9184ecf2386cc75cedfa91d6f172`](https://github.com/tmux/tmux/tree/ffbbdcc8529e9184ecf2386cc75cedfa91d6f172) |
+| Zellij | [`a79e15e178cd30b77b057db59ef0f05f2318c9f9`](https://github.com/zellij-org/zellij/tree/a79e15e178cd30b77b057db59ef0f05f2318c9f9) |
+| WezTerm | [`cab25161054c50fd6c705db4ceefef0f1e5a9575`](https://github.com/wezterm/wezterm/tree/cab25161054c50fd6c705db4ceefef0f1e5a9575) |
+| abduco | [`8c32909a159aaa9484c82b71f05b7a73321eb491`](https://github.com/martanne/abduco/tree/8c32909a159aaa9484c82b71f05b7a73321eb491) |
+| Ghostty / `libghostty-vt` | [`0538f7535be0cbca6bbe54e6fde654d5c628f1f2`](https://github.com/ghostty-org/ghostty/tree/0538f7535be0cbca6bbe54e6fde654d5c628f1f2) |
+| `libtsm` | [`ef2365d0f9f1a370d721a82470d69c3646fe97f0`](https://github.com/kmscon/libtsm/tree/ef2365d0f9f1a370d721a82470d69c3646fe97f0) |
+| Herdr | [`898f733f92dbbe53c428845534b03adb573f92be`](https://github.com/herdrdev/herdr/tree/898f733f92dbbe53c428845534b03adb573f92be) |
+| Paperclip | [`b3eb03fcbaaa1872776efbee18962def3a5e2d40`](https://github.com/paperclipai/paperclip/tree/b3eb03fcbaaa1872776efbee18962def3a5e2d40) |
+
 ## 2. tmux primary sources
 
 | Topic | Source | What it establishes |

@@ -75,7 +75,13 @@ client exit / SSH disconnect     → live session continues
 tmux server exit / host restart  → live process state is gone
 ```
 
-This is entirely adequate for the initial AgentVision proof, whose requirement is detach/reattach and clean process ownership, not checkpoint/restore of Linux processes.
+This makes tmux suitable for a **standalone detach/reattach substrate
+experiment**. It is not a requirement of AgentVision’s current initial proof:
+the approved Go-core boundary remains frontend-spawned and connection-scoped,
+so frontend shutdown or IPC loss tears down its sessions and core. Persistent
+detach/reattach, reconnect, and daemon operation remain later capabilities unless
+separately authorized. The experiment would test whether tmux can provide those
+capabilities without requiring process checkpoint/restore.
 
 ### 3.4 Multi-client and geometry semantics
 
@@ -404,11 +410,16 @@ Scores are judgments, not upstream facts. `5` is strongest for AgentVision’s s
 | Native Windows | 2 | 1 | 4 | 5 | 1 |
 | Current maintenance/release signal | 3 | 5 | 5 | 3 | 1 |
 | Low integration surface area | 4 | 4 | 3 | 2 | 2 |
-| **Weighted total / 230** |  | **202** | **183** | **152** | **111** |
+| **Weighted total / 215** |  | **192** | **173** | **140** | **106** |
 
 The numeric result should not be mistaken for a procurement truth. Its value is showing why tmux ranks first for the **specific provider experiment**: foreign-client support, raw bytes, snapshots, and mature lifecycle receive the largest weights. If AgentVision instead wanted to adopt an existing user-facing workspace largely intact, Zellij would rank much closer or first.
 
 ## 9. Recommended validation sequence
+
+This is the **substrate-specific technical sequence**, not a second competing
+product-validation roadmap. In the reuse guide’s next-three sequence, E2 is the
+bounded form of M1 and E3 is the bounded form of M2. M3 follows only if one of
+those provider probes passes; it is not one of the next three experiments.
 
 ### Experiment M1 — tmux provider fidelity
 

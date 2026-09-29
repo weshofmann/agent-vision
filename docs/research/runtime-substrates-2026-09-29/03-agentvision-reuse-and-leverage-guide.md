@@ -352,6 +352,11 @@ The UI can synthesize these into a concise attention indicator, but the underlyi
 
 ## 9. Three small validation experiments
 
+This is the authoritative **next-three** sequence. The multiplexer survey’s M1
+and M2 sections supply the deeper technical checklists for E2 and E3. Its M3
+provider-boundary proof is conditional follow-up work only after a substrate
+probe passes.
+
 ### E1 — supervision workflow comparison
 
 Create four synthetic concurrent work situations:
