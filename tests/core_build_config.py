@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the opt-in configure contract without fetching C++ dependencies."""
+"""Exercise the required-core configure contract without fetching C++ dependencies."""
 import argparse
 import os
 import pathlib
@@ -40,16 +40,15 @@ def main():
             assert (result.returncode == 0) == success, name
             assert not reason or reason in result.stdout + result.stderr, name
             return build
-        off = configure('off', [], True)
-        assert 'agentvision-core' not in (off / 'Makefile').read_text()
-        configure('missing', ['-DAGENTVISION_BUILD_CORE=ON'], False, 'absolute')
+        configure('off', ['-DAGENTVISION_BUILD_CORE=OFF'], False, 'requires AGENTVISION_BUILD_CORE=ON')
+        configure('missing-default', [], False, 'absolute')
         configure('relative', ['-DAGENTVISION_BUILD_CORE=ON', '-DAGENTVISION_GO_EXECUTABLE=go'], False, 'absolute')
         configure('target', ['-DAGENTVISION_BUILD_CORE=ON', '-DCMAKE_SYSTEM_NAME=Linux', '-DCMAKE_SYSTEM_PROCESSOR=x86_64', '-DAGENTVISION_GO_EXECUTABLE=' + args.go], False, 'Darwin arm64')
         fake = source / 'wrong-go'
         fake.write_text('#!/bin/sh\necho "go version go1.26.0 darwin/arm64"\n')
         fake.chmod(0o755)
         configure('version', ['-DAGENTVISION_BUILD_CORE=ON', '-DAGENTVISION_GO_EXECUTABLE=' + str(fake)], False, '1.27.0')
-        build = configure('on', ['-DAGENTVISION_BUILD_CORE=ON', '-DAGENTVISION_GO_EXECUTABLE=' + args.go], True)
+        build = configure('default-on', ['-DAGENTVISION_GO_EXECUTABLE=' + args.go], True)
         subprocess.run([args.cmake, '--build', str(build)], check=True, capture_output=True)
         binary = build / 'agentvision-core'
         before = binary.stat().st_mtime_ns
@@ -65,7 +64,7 @@ def main():
                          'core/third_party/creack-pty.pristine.json',
                          'core/third_party/creack-pty.downstream.json',
                          'patches/creack-pty-darwin-master-boundary.patch',
-                         'cmake/verify_creack_source.py'):
+                         'cmake/verify_creack_source.py', 'core/go.mod', 'core/go.sum'):
             before = binary.stat().st_mtime_ns
             time.sleep(1.05)
             (source / relative).touch()
@@ -111,7 +110,7 @@ sys.exit(int(os.environ['SYNTHETIC_EXIT']))
             assert pathlib.Path(record['work']).is_relative_to(execution/'tmp')
         test_file=(retained_build/'CTestTestfile.cmake').read_text()
         assert 'TIMEOUT "150"' in test_file, 'CTest timeout changed'
-        print('PASS: opt-in/off, pinned tool/target, rebuild/source integrity, notices, retained CTest success/failure')
+        print('PASS: required default/OFF rejection, pinned tool/target, rebuild/source integrity, notices, retained CTest success/failure')
 
 if __name__ == '__main__':
     main()

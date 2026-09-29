@@ -3,6 +3,9 @@
 #include "app.h"
 #include "window.h"
 #include "commands.h"
+#include "ipc_session.h"
+#include <chrono>
+#include <memory>
 #define Uses_TMenuPopup
 #define Uses_TMenu
 #define Uses_TMenuItem
@@ -14,6 +17,7 @@
 #define Uses_TKeys
 #define Uses_TEvent
 #define Uses_MsgBox
+#define Uses_TEventQueue
 #include <tvision/tv.h>
 #include <tvterm/vtermemu.h>
 
@@ -31,20 +35,171 @@ AgentVisionApp::AgentVisionApp() :
     TRect first(0, 0, width, height);
     TRect second(available.x / 8, available.y / 8,
                  available.x / 8 + width, available.y / 8 + height);
-    ready = addTerminal(first, 'A') && addTerminal(second, 'B');
+    auto started = agentvision::CoreConnection::startSibling([this] { localStopped(); });
+    connection = std::move(started.connection);
+    if (!connection) {
+        startupFailure = "Cannot start Go core (launch error " +
+            std::to_string(static_cast<int>(started.error)) + ").";
+        return;
+    }
+    agentvision::ConnectionEvent event;
+    if (!await(agentvision::ConnectionEvent::Kind::Ready, event)) return;
+    const bool created = addTerminal(first, 'A') && addTerminal(second, 'B');
+    {
+        std::lock_guard<std::mutex> lock(cleanupMutex);
+        // Serialize the handoff to runtime with the callback's cleanup boundary.
+        ready = created && startupAdoption.mayAdopt();
+        if (created && !ready) startupFailure = "Go core startup failed after contact cleanup.";
+    }
+    if (!ready) connection->shutdown();
 }
-static void onTermError(const char *reason)
+bool AgentVisionApp::startupAllowed()
 {
-    messageBox(mfError | mfOKButton, "Cannot create terminal: %s", reason);
+    std::lock_guard<std::mutex> lock(cleanupMutex);
+    if (startupAdoption.mayAdopt()) return true;
+    startupFailure = "Go core startup failed after contact cleanup.";
+    return false;
+}
+bool AgentVisionApp::await(agentvision::ConnectionEvent::Kind kind,
+                           agentvision::ConnectionEvent &event, agentvision::RequestId request)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+        serviceCleanup();
+        if (!startupAllowed()) return false;
+        if (!connection->pollEvent(event)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        if (event.kind == kind && (!request || event.request == request))
+            return startupAllowed();
+        if (event.kind == agentvision::ConnectionEvent::Kind::Lost ||
+            (event.kind == agentvision::ConnectionEvent::Kind::RequestError && event.request == request)) {
+            startupFailure = "Go core startup failed (contact " +
+                std::to_string(static_cast<int>(event.contactError)) + ", error " +
+                std::to_string(event.errorCode) + ").";
+            return false;
+        }
+        message(this, evBroadcast, cmCoreEvent, &event);
+    }
+    startupFailure = "Go core startup response deadline expired.";
+    connection->cancelLocal();
+    serviceCleanup();
+    return false;
 }
 bool AgentVisionApp::addTerminal(const TRect &bounds, char label)
 {
+    auto size = TerminalWindow::viewSize(bounds);
+    auto request = connection->createSession(uint16_t(size.y), uint16_t(size.x));
+    agentvision::ConnectionEvent created;
+    if (!request || !await(agentvision::ConnectionEvent::Kind::Created, created, request)) {
+        if (startupFailure.empty()) startupFailure = "Go core refused terminal creation.";
+        return false;
+    }
+    auto endpoint = connection->endpoint(created.session);
+    std::unique_lock<std::mutex> adoption(cleanupMutex);
+    if (!startupAdoption.mayAdopt()) {
+        startupFailure = "Go core startup failed after contact cleanup.";
+        return false;
+    }
+    // Presentation adoption is local, finite work. Holding only this UI gate
+    // makes it precede cleanup beginning; no socket operation or core join occurs.
     tvterm::VTermEmulatorFactory factory;
-    auto *controller = tvterm::TerminalController::create(
-        TerminalWindow::viewSize(bounds), factory, onTermError);
-    if (!controller) return false;
-    insertWindow(new TerminalWindow(bounds, *controller, label));
+    auto transport = std::unique_ptr<tvterm::SessionTransport>(
+        new agentvision::IpcSessionTransport(connection, endpoint));
+    auto *controller = tvterm::TerminalController::createWithTransport(size, factory, std::move(transport));
+    if (!controller) {
+        startupFailure = "Cannot create terminal presentation.";
+        return false;
+    }
+    insertWindow(new TerminalWindow(bounds, *controller, std::move(endpoint), label));
     return true;
+}
+void AgentVisionApp::stopPresentations()
+{
+    if (deskTop) message(this, evBroadcast, cmStopPresentations, nullptr);
+    if (!suspended) {
+        suspend(); // Actual outer-terminal restoration, before lifecycle acknowledgement.
+        suspended = true;
+    }
+}
+void AgentVisionApp::acknowledgeCleanup()
+{
+    std::lock_guard<std::mutex> lock(cleanupMutex);
+    startupAdoption.cleanupBegun();
+    cleanupTarget.acknowledge(agentvision::RestorationTarget::Clock::now());
+    cleanupAcknowledged = true;
+    cleanupChanged.notify_all();
+}
+void AgentVisionApp::localStopped()
+{
+    const auto entry = agentvision::RestorationTarget::Clock::now();
+    // start() can fail synchronously before assigning connection. No self-wait.
+    if (std::this_thread::get_id() == uiThread) {
+        {
+            std::lock_guard<std::mutex> lock(cleanupMutex);
+            startupAdoption.cleanupBegun();
+            cleanupTarget.begin(entry);
+        }
+        stopPresentations();
+        acknowledgeCleanup();
+        std::lock_guard<std::mutex> lock(cleanupMutex);
+        cleanupTargetMiss = cleanupTarget.missed();
+        return;
+    }
+    std::unique_lock<std::mutex> lock(cleanupMutex);
+    startupAdoption.cleanupBegun();
+    cleanupTarget.begin(entry); // Includes time awaiting this mutex; no target reset.
+    cleanupRequested = true;
+    TEventQueue::wakeUp();
+    const bool timedOut = !cleanupChanged.wait_until(lock, cleanupTarget.deadline(),
+                                 [this] { return cleanupAcknowledged; });
+    if (timedOut) {
+        cleanupTargetMiss = true;
+        // Safety barrier: missed target is not proof that the terminal restored.
+        // getEvent services finite local work; never escalate before its real ack.
+        cleanupChanged.wait(lock, [this] { return cleanupAcknowledged; });
+    }
+    // Predicate success may occur after the deadline. Judge the first real proof,
+    // not wait_until's return value or the time this waiter gets scheduled again.
+    cleanupTargetMiss = cleanupTarget.missed(timedOut);
+}
+void AgentVisionApp::serviceCleanup()
+{
+    {
+        std::lock_guard<std::mutex> lock(cleanupMutex);
+        if (!cleanupRequested || cleanupAcknowledged) return;
+    }
+    stopPresentations();
+    acknowledgeCleanup();
+    // Ack gate is released before join: lifecycle may now escalate its owned child.
+    if (connection) connection->join();
+    if (ready && !stopped) {
+        resume();
+        suspended = false;
+        redraw(); // Retained views and any active confirmation remain owned by TV.
+    }
+}
+void AgentVisionApp::getEvent(TEvent &event)
+{
+    serviceCleanup();
+    TApplication::getEvent(event);
+    serviceCleanup(); // Covers nested modal loops and continuous input, not just idle.
+}
+void AgentVisionApp::shutDown()
+{
+    stopped = true;
+    if (connection) connection->shutdown();
+    stopPresentations();
+    TApplication::shutDown();
+    acknowledgeCleanup();
+    if (connection) {
+        auto completion = connection->join();
+        if (!completion.graceful)
+            cleanupFailure = "Go core cleanup was not graceful (contact " +
+                std::to_string(static_cast<int>(completion.contactError)) + ", child kind " +
+                std::to_string(static_cast<int>(completion.core.kind)) + ").";
+    }
 }
 TDeskTop *AgentVisionApp::initDeskTop(TRect bounds)
 {
@@ -76,6 +231,9 @@ TStatusLine *AgentVisionApp::initStatusLine(TRect r)
 }
 void AgentVisionApp::idle()
 {
+    agentvision::ConnectionEvent event;
+    while (connection && connection->pollEvent(event))
+        message(this, evBroadcast, cmCoreEvent, &event);
     TApplication::idle();
     message(this, evBroadcast, cmCheckTerminalUpdates, nullptr);
 }

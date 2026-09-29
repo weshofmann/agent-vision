@@ -41,14 +41,20 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply_patch.py"
     "${tvterm_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-lifecycle.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-transport.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/tvterm-paste.patch"
     COMMAND_ERROR_IS_FATAL ANY)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
 foreach(notice IN ITEMS tvterm.COPYRIGHT tvision.COPYRIGHT libvterm.LICENSE)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
         "${CMAKE_CURRENT_BINARY_DIR}/licenses/${notice}" COPYONLY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/notices/${notice}"
+        DESTINATION share/agentvision/licenses)
 endforeach()
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    DESTINATION share/agentvision/licenses)
 add_executable(agentvision src/main.cpp src/app.cpp src/window.cpp)
-target_link_libraries(agentvision PRIVATE tvterm-core)
+install(TARGETS agentvision RUNTIME DESTINATION bin)
+target_link_libraries(agentvision PRIVATE agentvision-ipc-session)
 target_compile_options(agentvision PRIVATE -Wall -Wextra)
 add_library(agentvision-core-client STATIC src/core_protocol.cpp src/core_process.cpp src/core_connection.cpp)
 target_include_directories(agentvision-core-client PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -60,7 +66,14 @@ find_package(Threads REQUIRED)
 target_link_libraries(agentvision-core-client PUBLIC Threads::Threads)
 include(CTest)
 agentvision_configure_core()
+if(AGENTVISION_BUILD_CORE)
+    add_dependencies(agentvision agentvision-core-build)
+endif()
 if(BUILD_TESTING)
+    add_executable(frontend_cleanup_test tests/frontend_cleanup.cpp)
+    target_include_directories(frontend_cleanup_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(frontend_cleanup_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME frontend_cleanup COMMAND frontend_cleanup_test)
     if(AGENTVISION_BUILD_CORE)
         add_executable(ipc_terminal_test tests/ipc_terminal.cpp)
         target_link_libraries(ipc_terminal_test PRIVATE agentvision-ipc-session)
@@ -89,6 +102,16 @@ if(BUILD_TESTING)
     target_compile_definitions(core_protocol_test PRIVATE AVCP_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/protocol/v1")
     add_test(NAME core_protocol COMMAND core_protocol_test)
     if(APPLE)
+        add_executable(startup_adoption_test tests/startup_adoption.cpp)
+        target_link_libraries(startup_adoption_test PRIVATE agentvision-core-client)
+        target_compile_options(startup_adoption_test PRIVATE -Wall -Wextra -Wpedantic)
+        configure_file(tests/desktop_core_fixture.py ${CMAKE_CURRENT_BINARY_DIR}/desktop_core_fixture.py COPYONLY)
+        file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/desktop_core_fixture.py PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+        target_compile_definitions(startup_adoption_test PRIVATE
+            DESKTOP_CORE="${CMAKE_CURRENT_BINARY_DIR}/desktop_core_fixture.py"
+            STARTUP_AUDIT="${CMAKE_CURRENT_BINARY_DIR}/startup-adoption-audit.json")
+        add_test(NAME startup_adoption COMMAND startup_adoption_test)
+        set_tests_properties(startup_adoption PROPERTIES TIMEOUT 15)
         add_executable(ipc_session_reserve_test tests/ipc_session_reserve.cpp)
         target_link_libraries(ipc_session_reserve_test PRIVATE agentvision-ipc-session)
         target_compile_definitions(ipc_session_reserve_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
@@ -108,6 +131,20 @@ if(BUILD_TESTING)
         target_compile_options(core_connection_test PRIVATE -Wall -Wextra -Wpedantic)
         target_compile_definitions(core_connection_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
         add_test(NAME core_connection COMMAND core_connection_test)
+        add_executable(fake_core_session_output_test tests/fake_core_session_output.cpp)
+        target_link_libraries(fake_core_session_output_test PRIVATE agentvision-core-client)
+        target_compile_options(fake_core_session_output_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(fake_core_session_output_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
+        add_test(NAME fake_core_session_output COMMAND fake_core_session_output_test)
+        set_tests_properties(fake_core_session_output PROPERTIES TIMEOUT 10)
+        add_executable(session_metadata_test tests/session_metadata.cpp src/window.cpp)
+        target_link_libraries(session_metadata_test PRIVATE agentvision-ipc-session)
+        target_compile_options(session_metadata_test PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_definitions(session_metadata_test PRIVATE FAKE_CORE="${CMAKE_CURRENT_BINARY_DIR}/fake_core.py")
+        foreach(case IN ITEMS ui-captions lifecycle close-pending-live unavailable loss-before-status loss-after-status)
+            add_test(NAME session_metadata_${case} COMMAND session_metadata_test ${case})
+            set_tests_properties(session_metadata_${case} PROPERTIES TIMEOUT 15)
+        endforeach()
         # Separate instrumented binary: no race barriers in the shipping library.
         add_executable(core_connection_credit_race_test tests/core_connection_credit_race.cpp
             src/core_protocol.cpp src/core_process.cpp src/core_connection.cpp)
@@ -134,6 +171,17 @@ if(BUILD_TESTING)
         file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/fake_core.py PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
         add_test(NAME core_process COMMAND core_process_test)
         set_tests_properties(core_process PROPERTIES TIMEOUT 20)
+        add_test(NAME package_siblings COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings.py" "${CMAKE_COMMAND}"
+            "${CMAKE_CURRENT_BINARY_DIR}" --output "${CMAKE_CURRENT_BINARY_DIR}/package-evidence")
+        set_tests_properties(package_siblings PROPERTIES TIMEOUT 60
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
+        add_test(NAME package_siblings_audit COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/package_siblings_audit_test.py"
+            $<TARGET_FILE:agentvision> "${CMAKE_CURRENT_BINARY_DIR}/agentvision-core"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/package-audit-evidence")
+        set_tests_properties(package_siblings_audit PROPERTIES TIMEOUT 20
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
         add_test(NAME ipc_terminal_decode COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipc_terminal_decode.py")
         set_tests_properties(ipc_terminal_decode PROPERTIES TIMEOUT 30
@@ -171,6 +219,10 @@ if(BUILD_TESTING)
     endforeach()
     set_tests_properties(lifecycle PROPERTIES TIMEOUT 20)
     if(APPLE)
+        add_test(NAME desktop_termios_oracle COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_termios_test.py")
+        set_tests_properties(desktop_termios_oracle PROPERTIES TIMEOUT 10
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/.probe/tools;PYTHONDONTWRITEBYTECODE=1")
         add_test(NAME desktop_pty COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_pty.py" $<TARGET_FILE:agentvision>
             --output "${CMAKE_CURRENT_BINARY_DIR}/desktop-evidence")

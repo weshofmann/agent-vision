@@ -380,9 +380,9 @@ class App final : public TApplication {
                 } else if (e.kind == ConnectionEvent::Kind::Lost) {
                     check(workloadCompleted && intentionalLoss,
                           "premature contact loss before intentional trigger");
-                    if (wa)
+                    if (wa && !suppressCaption)
                         wa->lost = true;
-                    if (wb)
+                    if (wb && !suppressCaption)
                         wb->lost = true;
                 }
             }
@@ -583,7 +583,10 @@ class App final : public TApplication {
                 continue;
             finish(w);
             local(w, w == wa ? a : b);
-            w->lost = w->transport.ipc.metadata().state == SessionState::Lost;
+            // The no-caption negative fixture must withhold the presentation
+            // marker even from redraws triggered by local retained interaction.
+            if (!suppressCaption)
+                w->lost = w->transport.ipc.metadata().state == SessionState::Lost;
         }
         if (loss && workloadCompleted && wb) {
             check(wb->transport.ipc.metadata().state == SessionState::Lost,

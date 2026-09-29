@@ -1,0 +1,24 @@
+diff --git a/source/tvterm-core/vtermemu.cc b/source/tvterm-core/vtermemu.cc
+index 7a550af..388a8e5 100644
+--- a/source/tvterm-core/vtermemu.cc
++++ b/source/tvterm-core/vtermemu.cc
+@@ -296,7 +296,18 @@ void VTermEmulator::handleEvent(const TerminalEvent &event) noexcept
+     switch (event.type)
+     {
+         case TerminalEventType::KeyDown:
+-            processKey(vt, event.keyDown);
++            if ((event.keyDown.controlKeyState & kbPaste) != 0 &&
++                event.keyDown.textLength != 0)
++            {
++                // Turbo Vision has already identified and normalized paste text.
++                // Let libvterm honor the inner terminal's bracketed-paste mode,
++                // but send the complete UTF-8 event literally, including LF.
++                vterm_keyboard_start_paste(vt);
++                clientDataWriter.write({event.keyDown.text, event.keyDown.textLength});
++                vterm_keyboard_end_paste(vt);
++            }
++            else
++                processKey(vt, event.keyDown);
+             scrollback.followTerminal();
+             break;
+ 

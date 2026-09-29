@@ -78,13 +78,27 @@ static void validationErrors() {
 static char readByte(int fd) { char b=0; check(read(fd,&b,1)==1,"child ready"); return b; }
 int main(int argc,char **argv) { try {
     if(argc==2 && std::string(argv[1])=="sibling-check") {
-        // Run this copied executable from an unrelated cwd with poisoned PATH.
-        check(chdir("/")==0,"independent cwd"); setenv("PATH","/no-such-synthetic-directory",1);
+        // Run this copied executable from an unrelated cwd with a runnable PATH
+        // impostor. Sibling resolution must reject the missing neighbor rather
+        // than silently executing an unrelated name.
+        check(chdir("/")==0,"independent cwd");
+        std::string pathPattern=std::string(argv[0])+".path-impostor-XXXXXX";
+        std::vector<char> pathTemplate(pathPattern.begin(),pathPattern.end()); pathTemplate.push_back(0);
+        check(mkdtemp(pathTemplate.data()),"synthetic PATH directory");
+        std::string impostor=std::string(pathTemplate.data())+"/agentvision-core";
+        copyExecutable(argv[0],impostor);
+        struct PathCleanup {
+            std::string directory, executable;
+            ~PathCleanup() { unlink(executable.c_str()); rmdir(directory.c_str()); }
+        } pathCleanup{pathTemplate.data(),impostor};
+        setenv("PATH",pathCleanup.directory.c_str(),1);
+        setenv("AV_TEST_MARKER","I",1);
         auto missing=CoreProcess::launchSibling(); check(!missing.process && missing.error==LaunchError::InvalidPath,"missing packaged sibling");
         std::string sibling=std::string(argv[0]).substr(0,std::string(argv[0]).find_last_of('/')+1)+"agentvision-core";
         copyExecutable(argv[0],sibling); check(chmod(sibling.c_str(),0600)==0,"nonexec sibling fixture");
         check(CoreProcess::launchSibling().error==LaunchError::NotExecutable,"nonexecutable packaged sibling");
-        check(chmod(sibling.c_str(),0700)==0,"executable sibling fixture"); unsetenv("AV_TEST_MODE");
+        check(chmod(sibling.c_str(),0700)==0,"executable sibling fixture");
+        unsetenv("AV_TEST_MODE"); unsetenv("AV_TEST_MARKER");
         auto found=CoreProcess::launchSibling(); check(bool(found.process),"packaged sibling independent of cwd/PATH");
         check(readByte(found.process->ipcFd())=='N',"packaged sibling IPC"); check(found.process->join().value==23,"packaged sibling reap");
         unlink(sibling.c_str()); return 0;
@@ -96,7 +110,8 @@ int main(int argc,char **argv) { try {
         for(int fd=4;fd<1024;++fd) check(fcntl(fd,F_GETFD)==-1 && errno==EBADF,"unintended exec descriptor");
         std::string mode=getenv("AV_TEST_MODE")?getenv("AV_TEST_MODE"):"natural";
         if(mode=="ignore" || mode=="stopped") signal(SIGTERM,SIG_IGN);
-        char ready='N'; check(write(3,&ready,1)==1,"native ready");
+        char ready=getenv("AV_TEST_MARKER")?getenv("AV_TEST_MARKER")[0]:'N';
+        check(write(3,&ready,1)==1,"native ready");
         if(mode=="stopped") { raise(SIGSTOP); for(;;) pause(); }
         if(mode=="signal") { raise(SIGUSR1); return 92; }
         if(mode=="eof") { char b; while(read(3,&b,1)>0){} return 24; }
